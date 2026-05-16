@@ -8,6 +8,7 @@ from app.routers.users import router as users_router
 from app.routers.purchases import router as purchases_router
 from app.routers.ai import router as ai_router
 from app.routers.recommendations import router as recommendations_router
+from app.routers.seed import router as seed_router
 
 load_dotenv('.env.local')
 
@@ -31,6 +32,7 @@ app.include_router(products_router)
 app.include_router(purchases_router)
 app.include_router(ai_router)
 app.include_router(recommendations_router)
+app.include_router(seed_router)
 
 
 @app.get("/")
