@@ -40,15 +40,12 @@ class AiSetChatResponse(BaseModel):
     suggested_products: list[ProductResponse]
 
 
-def keyword_search(db: Session, query: str, budget: Optional[int], limit: int) -> list:
-    """embeddingがない場合のフォールバック：タイトルキーワード検索"""
-    q = db.query(Product).filter(
-        Product.status == ProductStatus.available,
-        Product.title.contains(query),
-    )
+def get_all_available(db: Session, budget: Optional[int]) -> list:
+    """embeddingがない場合のフォールバック：全商品をGeminiに渡す"""
+    q = db.query(Product).filter(Product.status == ProductStatus.available)
     if budget:
         q = q.filter(Product.price <= budget)
-    return q.limit(limit).all()
+    return q.limit(50).all()
 
 
 @router.post("/chat", response_model=AiSetChatResponse)
@@ -83,9 +80,9 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
             scored.sort(key=lambda x: x[0], reverse=True)
             suggested_products = [p for _, p in scored[:TOP_K]]
 
-    # Step 2: embeddingがある商品が0件ならキーワード検索にフォールバック
+    # Step 2: embeddingがある商品が0件なら全商品をフォールバックとして渡す
     if not suggested_products:
-        suggested_products = keyword_search(db, user_message, request.budget, TOP_K)
+        suggested_products = get_all_available(db, request.budget)
 
     # Step 3: Geminiに渡すコンテキストを構築
     if suggested_products:
