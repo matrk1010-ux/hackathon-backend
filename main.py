@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from sqlalchemy import text
 
 from app.routers import auth
 from app.routers.products.router import router as products_router
@@ -8,15 +9,28 @@ from app.routers.users import router as users_router
 from app.routers.purchases import router as purchases_router
 from app.routers.ai import router as ai_router
 from app.routers.recommendations import router as recommendations_router
-from app.routers.seed import router as seed_router
+from app.routers.ai_set import router as ai_set_router
+from app.database import engine
 
 load_dotenv('.env.local')
+
+
+def run_migrations():
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE products ADD COLUMN embedding JSON"))
+            conn.commit()
+        except Exception:
+            pass  # カラムが既に存在する場合はスキップ
+
 
 app = FastAPI(
     title="Hackathon Freemarket App",
     description="AI-powered freemarket application",
     version="1.0.0"
 )
+
+run_migrations()
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,7 +46,7 @@ app.include_router(products_router)
 app.include_router(purchases_router)
 app.include_router(ai_router)
 app.include_router(recommendations_router)
-app.include_router(seed_router)
+app.include_router(ai_set_router)
 
 
 @app.get("/")

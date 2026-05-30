@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, Enum, ForeignKey, Boolean, Index
+from sqlalchemy import Column, Integer, String, Text, Float, DateTime, Enum, ForeignKey, Boolean, Index, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
@@ -47,6 +47,7 @@ class Product(Base):
     category = Column(String(100), index=True)
     image_url = Column(String(255))
     status = Column(Enum(ProductStatus), default=ProductStatus.available, index=True)
+    embedding = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

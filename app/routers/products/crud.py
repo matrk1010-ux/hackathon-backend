@@ -3,6 +3,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from app.models import Product, User, ProductStatus
 from app.schemas import ProductCreate, ProductUpdate
+from app.ml.embeddings import get_embedding
 from datetime import datetime
 
 def get_product_by_id(db: Session, product_id: int):
@@ -38,6 +39,17 @@ def create_product(db: Session, product: ProductCreate, seller_email: str):
     db.add(db_product)
     db.commit()
     db.refresh(db_product)
+
+    # Embeddingを非同期的に生成して保存（失敗しても出品は成功とする）
+    try:
+        embed_text = f"{product.title} {product.category or ''} {product.description or ''}"
+        embedding = get_embedding(embed_text)
+        if embedding:
+            db_product.embedding = embedding
+            db.commit()
+    except Exception:
+        pass
+
     return db_product
 
 def update_product(db: Session, product_id: int, product_update: ProductUpdate, seller_email: str):
