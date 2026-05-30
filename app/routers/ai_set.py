@@ -1,4 +1,6 @@
 import os
+import re
+import json
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -13,14 +15,20 @@ from app.ml.embeddings import get_embedding, cosine_similarity
 router = APIRouter(prefix="/ai-set", tags=["ai-set"])
 
 SYSTEM_PROMPT = """あなたはフリマアプリのAIショッピングアシスタントです。
-ユーザーの要望に合った商品セットをアプリ内の実在商品から提案します。
+ユーザーの要望に本当に合った商品だけを、アプリ内の実在商品から厳選して提案します。
 
 ルール：
-- 必ず提示された【アプリ内の関連商品】リストの中からのみ提案する
-- 各商品を提案する理由を一言添える（なぜその人に必要か）
+- 必ず提示された【候補商品】リストの中からのみ選ぶ
+- ユーザーの要望に関係のない商品は絶対に提案しない（無理に数を揃えない）
+- 本当に関係する商品が1つもなければ、正直に「該当する商品が見つかりませんでした」と伝える
+- 各商品を提案する理由を一言添える
 - 会話の文脈を踏まえて条件の絞り込みにも対応する
-- マッチする商品がない場合は正直に「現在出品されていません」と伝える
-- 返答は日本語で、親しみやすいトーンで200文字程度にまとめる"""
+- 返答は日本語で、親しみやすいトーンで200文字程度にまとめる
+
+【出力フォーマット】
+返答の最後に、実際に提案した商品のIDを必ず以下のJSON形式で記載してください（ユーザーには表示されません）：
+<SELECTED>[1, 5, 6]</SELECTED>
+1つも提案しない場合は <SELECTED>[]</SELECTED> と記載してください。"""
 
 TOP_K = 6
 
@@ -59,8 +67,8 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
     if not user_message:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No user message found")
 
-    # Step 1: クエリをEmbedding化してRAG検索
-    suggested_products = []
+    # Step 1: クエリをEmbedding化してRAG検索で候補を絞る
+    candidates = []
     query_embedding = get_embedding(user_message)
 
     if query_embedding:
@@ -78,16 +86,16 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
                 for p in products_with_emb
             ]
             scored.sort(key=lambda x: x[0], reverse=True)
-            suggested_products = [p for _, p in scored[:TOP_K]]
+            candidates = [p for _, p in scored[:TOP_K]]
 
-    # Step 2: embeddingがある商品が0件なら全商品をフォールバックとして渡す
-    if not suggested_products:
-        suggested_products = get_all_available(db, request.budget)
+    # Step 2: embeddingがある商品が0件なら全商品を候補として渡す
+    if not candidates:
+        candidates = get_all_available(db, request.budget)
 
-    # Step 3: Geminiに渡すコンテキストを構築
-    if suggested_products:
-        product_context = "\n\n【アプリ内の関連商品】\n"
-        for p in suggested_products:
+    # Step 3: Geminiに渡す候補リストを構築
+    if candidates:
+        product_context = "\n\n【候補商品】\n"
+        for p in candidates:
             product_context += f"- ID:{p.id} 「{p.title}」 ¥{p.price:,}"
             if p.category:
                 product_context += f" [{p.category}]"
@@ -95,7 +103,7 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
                 product_context += f"\n  説明: {p.description[:80]}"
             product_context += "\n"
     else:
-        product_context = "\n\n【アプリ内の関連商品】\n現在マッチする商品が出品されていません。\n"
+        product_context = "\n\n【候補商品】\n現在出品されている商品がありません。\n"
 
     if request.budget:
         product_context += f"\n【予算】¥{request.budget:,}以内\n"
@@ -108,9 +116,23 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
     ]
     chat = model.start_chat(history=history)
     response = chat.send_message(user_message + product_context)
+    raw_text = response.text.strip()
+
+    # Step 5: Geminiが選んだ商品IDを抽出し、それだけをカード表示
+    selected_ids = []
+    match = re.search(r"<SELECTED>\s*(\[.*?\])\s*</SELECTED>", raw_text, re.DOTALL)
+    if match:
+        try:
+            selected_ids = json.loads(match.group(1))
+        except Exception:
+            selected_ids = []
+    reply = re.sub(r"<SELECTED>.*?</SELECTED>", "", raw_text, flags=re.DOTALL).strip()
+
+    candidate_map = {p.id: p for p in candidates}
+    suggested_products = [candidate_map[i] for i in selected_ids if i in candidate_map]
 
     return AiSetChatResponse(
-        reply=response.text.strip(),
+        reply=reply,
         suggested_products=suggested_products,
     )
 
