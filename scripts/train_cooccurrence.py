@@ -21,7 +21,7 @@ from datasets import load_dataset
 # ============================================================
 
 # 読み込む行数（多いほど精度UP・時間もかかる）
-SAMPLE_SIZE = 1000
+SAMPLE_SIZE = 100_000
 
 # アプリで使うカテゴリ一覧
 APP_CATEGORIES = [
