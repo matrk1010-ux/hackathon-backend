@@ -1,7 +1,7 @@
 # 商品 CRUD ロジック
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
-from app.models import Product, User, ProductStatus
+from app.models import Product, User, ProductStatus, Like, UserView, Recommendation
 from app.schemas import ProductCreate, ProductUpdate
 from app.ml.embeddings import get_embedding
 from datetime import datetime
@@ -97,6 +97,11 @@ def delete_product(db: Session, product_id: int, seller_email: str):
             detail="You don't have permission to delete this product"
         )
     
+    # 外部キー制約を回避するため、関連する子レコードを先に削除
+    db.query(Like).filter(Like.product_id == product_id).delete(synchronize_session=False)
+    db.query(UserView).filter(UserView.product_id == product_id).delete(synchronize_session=False)
+    db.query(Recommendation).filter(Recommendation.recommended_product_id == product_id).delete(synchronize_session=False)
+
     db.delete(db_product)
     db.commit()
     return {"message": "Product deleted successfully"}
