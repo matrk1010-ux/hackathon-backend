@@ -45,6 +45,7 @@ class Product(Base):
     description = Column(Text)
     price = Column(Integer, nullable=False)
     category = Column(String(100), index=True)
+    condition = Column(String(50), nullable=True)
     image_url = Column(String(255))
     status = Column(Enum(ProductStatus), default=ProductStatus.available, index=True)
     embedding = Column(JSON, nullable=True)

@@ -47,6 +47,7 @@ class ProductBase(BaseModel):
     description: Optional[str] = None
     price: int
     category: Optional[str] = None
+    condition: Optional[str] = None
     image_url: Optional[str] = None
 
 class ProductCreate(ProductBase):
@@ -57,6 +58,7 @@ class ProductUpdate(BaseModel):
     description: Optional[str] = None
     price: Optional[int] = None
     category: Optional[str] = None
+    condition: Optional[str] = None
     image_url: Optional[str] = None
     status: Optional[ProductStatusSchema] = None
 

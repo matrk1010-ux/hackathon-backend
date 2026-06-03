@@ -32,6 +32,7 @@ def create_product(db: Session, product: ProductCreate, seller_email: str):
         description=product.description,
         price=product.price,
         category=product.category,
+        condition=product.condition,
         image_url=product.image_url,
         status=ProductStatus.available
     )
@@ -42,7 +43,7 @@ def create_product(db: Session, product: ProductCreate, seller_email: str):
 
     # Embeddingを非同期的に生成して保存（失敗しても出品は成功とする）
     try:
-        embed_text = f"{product.title} {product.category or ''} {product.description or ''}"
+        embed_text = f"{product.title} {product.category or ''} {product.condition or ''} {product.description or ''}"
         embedding = get_embedding(embed_text)
         if embedding:
             db_product.embedding = embedding
@@ -74,6 +75,8 @@ def update_product(db: Session, product_id: int, product_update: ProductUpdate, 
         db_product.price = product_update.price
     if product_update.category is not None:
         db_product.category = product_update.category
+    if product_update.condition is not None:
+        db_product.condition = product_update.condition
     if product_update.image_url is not None:
         db_product.image_url = product_update.image_url
     if product_update.status is not None:

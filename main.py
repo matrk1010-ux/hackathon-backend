@@ -16,12 +16,17 @@ load_dotenv('.env.local')
 
 
 def run_migrations():
-    with engine.connect() as conn:
-        try:
-            conn.execute(text("ALTER TABLE products ADD COLUMN embedding JSON"))
-            conn.commit()
-        except Exception:
-            pass  # カラムが既に存在する場合はスキップ
+    migrations = [
+        "ALTER TABLE products ADD COLUMN embedding JSON",
+        "ALTER TABLE products ADD COLUMN condition VARCHAR(50)",
+    ]
+    for sql in migrations:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+            except Exception:
+                pass  # カラムが既に存在する場合はスキップ
 
 
 app = FastAPI(
