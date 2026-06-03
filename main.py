@@ -18,7 +18,7 @@ load_dotenv('.env.local')
 def run_migrations():
     migrations = [
         "ALTER TABLE products ADD COLUMN embedding JSON",
-        "ALTER TABLE products ADD COLUMN condition VARCHAR(50)",
+        "ALTER TABLE products ADD COLUMN `condition` VARCHAR(50)",
     ]
     for sql in migrations:
         with engine.connect() as conn:
