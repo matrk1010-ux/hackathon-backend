@@ -42,7 +42,8 @@ class Message(BaseModel):
 
 class AiSetChatRequest(BaseModel):
     messages: list[Message]
-    budget: Optional[int] = None
+    min_budget: Optional[int] = None
+    max_budget: Optional[int] = None
 
 
 class AiSetChatResponse(BaseModel):
@@ -50,11 +51,21 @@ class AiSetChatResponse(BaseModel):
     suggested_products: list[ProductResponse]
 
 
-def get_all_available(db: Session, budget: Optional[int]) -> list:
+def in_budget(price: int, min_budget: Optional[int], max_budget: Optional[int]) -> bool:
+    if min_budget is not None and price < min_budget:
+        return False
+    if max_budget is not None and price > max_budget:
+        return False
+    return True
+
+
+def get_all_available(db: Session, min_budget: Optional[int], max_budget: Optional[int]) -> list:
     """embeddingがない場合のフォールバック：全商品をGeminiに渡す"""
     q = db.query(Product).filter(Product.status == ProductStatus.available)
-    if budget:
-        q = q.filter(Product.price <= budget)
+    if min_budget is not None:
+        q = q.filter(Product.price >= min_budget)
+    if max_budget is not None:
+        q = q.filter(Product.price <= max_budget)
     return q.limit(50).all()
 
 
@@ -79,8 +90,10 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
             Product.embedding.isnot(None),
         ).all()
 
-        if request.budget:
-            products_with_emb = [p for p in products_with_emb if p.price <= request.budget]
+        products_with_emb = [
+            p for p in products_with_emb
+            if in_budget(p.price, request.min_budget, request.max_budget)
+        ]
 
         if products_with_emb:
             scored = [
@@ -92,7 +105,7 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
 
     # Step 2: embeddingがある商品が0件なら全商品を候補として渡す
     if not candidates:
-        candidates = get_all_available(db, request.budget)
+        candidates = get_all_available(db, request.min_budget, request.max_budget)
 
     # Step 3: Geminiに渡す候補リストを構築
     if candidates:
@@ -107,8 +120,10 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
     else:
         product_context = "\n\n【候補商品】\n現在出品されている商品がありません。\n"
 
-    if request.budget:
-        product_context += f"\n【予算】¥{request.budget:,}以内\n"
+    if request.min_budget is not None or request.max_budget is not None:
+        lo = f"¥{request.min_budget:,}" if request.min_budget is not None else "下限なし"
+        hi = f"¥{request.max_budget:,}" if request.max_budget is not None else "上限なし"
+        product_context += f"\n【予算】{lo} 〜 {hi}\n"
 
     # Step 4: Geminiにセット提案を依頼
     model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=SYSTEM_PROMPT)
