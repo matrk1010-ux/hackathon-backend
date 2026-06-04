@@ -88,25 +88,37 @@ def recommend_by_category(
         recommend_cat_scores, key=lambda c: recommend_cat_scores[c], reverse=True
     )[:3]
 
-    # 対象カテゴリの商品をDBから取得
-    query = (
-        db.query(Product)
-        .filter(
+    # カテゴリスコアに比例して各カテゴリの枠数を割り当てる。
+    # （全カテゴリを一括の新着順にすると、最近大量投入したカテゴリが枠を
+    #   独占してしまうため。スコアの高いカテゴリほど多く出す）
+    total_score = sum(recommend_cat_scores[c] for c in top_categories) or 1
+    products = []
+    seen_ids = set(purchased_ids)
+
+    for cat in top_categories:
+        if len(products) >= limit:
+            break
+        quota = max(1, round(limit * recommend_cat_scores[cat] / total_score))
+        quota = min(quota, limit - len(products))
+
+        cat_query = db.query(Product).filter(
             Product.status == ProductStatus.available,
             Product.seller_id != user_id,
-            Product.category.in_(top_categories),
+            Product.category == cat,
         )
-    )
-    if purchased_ids:
-        query = query.filter(Product.id.notin_(purchased_ids))
+        if seen_ids:
+            cat_query = cat_query.filter(Product.id.notin_(list(seen_ids)))
 
-    products = query.order_by(Product.created_at.desc()).limit(limit).all()
+        cat_products = (
+            cat_query.order_by(Product.created_at.desc()).limit(quota).all()
+        )
+        for p in cat_products:
+            products.append(p)
+            seen_ids.add(p.id)
 
     # 足りなければ「ユーザーの興味カテゴリ内」だけで補完する。
     # （無関係な新着＝今は本・漫画でそのまま埋めない）
     if len(products) < limit:
-        shown_ids = [p.id for p in products]
-        exclude_ids = purchased_ids + shown_ids
         # 実際に見た/いいねしたカテゴリ ＋ 共起で選ばれた上位カテゴリ
         interest_categories = list(set(top_categories) | set(user_cat_scores.keys()))
 
@@ -115,8 +127,8 @@ def recommend_by_category(
             Product.seller_id != user_id,
             Product.category.in_(interest_categories),
         )
-        if exclude_ids:
-            supp_query = supp_query.filter(Product.id.notin_(exclude_ids))
+        if seen_ids:
+            supp_query = supp_query.filter(Product.id.notin_(list(seen_ids)))
 
         supplements = (
             supp_query.order_by(Product.created_at.desc())
