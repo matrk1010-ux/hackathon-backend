@@ -226,6 +226,15 @@ def embed_debug():
         info["result"] = "ERROR"
         info["error_type"] = type(e).__name__
         info["error_message"] = str(e)[:500]
+    # embedContent をサポートする実在モデルを列挙する
+    try:
+        embed_models = []
+        for m in genai.list_models():
+            if "embedContent" in getattr(m, "supported_generation_methods", []):
+                embed_models.append(m.name)
+        info["embed_models"] = embed_models
+    except Exception as e:
+        info["list_models_error"] = f"{type(e).__name__}: {str(e)[:300]}"
     return info
 
 
