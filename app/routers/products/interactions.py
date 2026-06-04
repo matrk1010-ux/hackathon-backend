@@ -4,6 +4,28 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_
 from app.models import Product, User, UserView, Like
 
+def get_liked_products(db: Session, user_email: str, skip: int = 0, limit: int = 100):
+    """ユーザーがいいねした商品一覧を取得（新しい順）"""
+    user = db.query(User).filter(User.email == user_email).first()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    products = (
+        db.query(Product)
+        .join(Like, Like.product_id == Product.id)
+        .filter(Like.user_id == user.id)
+        .order_by(Like.liked_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return products
+
+
 def record_view(db: Session, product_id: int, user_email: str):
     """商品の閲覧を記録"""
     user = db.query(User).filter(User.email == user_email).first()

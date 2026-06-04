@@ -76,6 +76,16 @@ def get_seller_products(
 
 # ==================== Interactions ====================
 
+@router.get("/liked/{user_email}", response_model=List[ProductResponse])
+def get_liked_products(
+    user_email: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=100),
+    db: Session = Depends(get_db)
+):
+    """ユーザーがいいねした商品一覧を取得"""
+    return interactions.get_liked_products(db, user_email, skip, limit)
+
 @router.post("/{product_id}/view")
 def record_product_view(
     product_id: int,
