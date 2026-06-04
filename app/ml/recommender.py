@@ -1,8 +1,9 @@
 import json
 import os
+import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List
+from typing import List, Optional
 from app.models import Product, UserView, Like, Purchase, ProductStatus
 
 # ==================== 学習済みモデルの読み込み ====================
@@ -18,6 +19,66 @@ def _load_similarity() -> dict:
 
 # 起動時に1回だけ読み込む
 CATEGORY_SIMILARITY = _load_similarity()
+
+# ハイブリッドスコアの重み（カテゴリ共起 と embedding類似度 の配合）
+CAT_WEIGHT = 0.4   # α: カテゴリ共起スコア（多様性・文脈）
+EMB_WEIGHT = 0.6   # β: embedding類似度（アイテム単位の好み）
+
+# 行動シグナルの重み（嗜好ベクトル作成時）
+VIEW_WEIGHT = 1.0
+LIKE_WEIGHT = 5.0
+# 候補プールの上限（embedding再ランクの計算対象）
+CANDIDATE_POOL = 300
+
+
+def _build_taste_vector(db: Session, user_id: int) -> Optional[np.ndarray]:
+    """ユーザーが見た/いいねした商品のembeddingを重み付き平均し、嗜好ベクトルを作る。
+    embedding付きの行動が1つも無ければ None を返す。"""
+    weighted_sum = None
+    total_weight = 0.0
+
+    # いいねした商品（強いシグナル）
+    liked_products = (
+        db.query(Product.embedding)
+        .join(Like, Like.product_id == Product.id)
+        .filter(Like.user_id == user_id, Product.embedding.isnot(None))
+        .all()
+    )
+    # 閲覧した商品（弱いシグナル）
+    viewed_products = (
+        db.query(Product.embedding)
+        .join(UserView, UserView.product_id == Product.id)
+        .filter(UserView.user_id == user_id, Product.embedding.isnot(None))
+        .all()
+    )
+
+    for (emb,), weight in (
+        [(row, LIKE_WEIGHT) for row in liked_products]
+        + [(row, VIEW_WEIGHT) for row in viewed_products]
+    ):
+        if not emb:
+            continue
+        vec = np.array(emb, dtype=float)
+        weighted_sum = vec * weight if weighted_sum is None else weighted_sum + vec * weight
+        total_weight += weight
+
+    if weighted_sum is None or total_weight == 0:
+        return None
+
+    avg = weighted_sum / total_weight
+    norm = np.linalg.norm(avg)
+    return avg / norm if norm > 0 else None
+
+
+def _cosine(vec: np.ndarray, emb: list) -> float:
+    """正規化済み嗜好ベクトル vec と 商品embedding のコサイン類似度"""
+    if not emb:
+        return 0.0
+    b = np.array(emb, dtype=float)
+    nb = np.linalg.norm(b)
+    if nb == 0:
+        return 0.0
+    return float(np.dot(vec, b) / nb)
 
 
 # ==================== メイン推薦関数 ====================
@@ -100,6 +161,17 @@ def recommend_by_category(
         recommend_cat_scores, key=lambda c: recommend_cat_scores[c], reverse=True
     )[:3]
 
+    # --- A+B: 嗜好ベクトルがあれば embedding × カテゴリ共起 のハイブリッドで再ランク ---
+    taste_vec = _build_taste_vector(db, user_id)
+    if taste_vec is not None:
+        reranked = _hybrid_rerank(
+            db, user_id, limit, purchased_ids,
+            recommend_cat_scores, user_cat_scores, top_categories, taste_vec,
+        )
+        if reranked:
+            return reranked
+        # 万一候補が組めなければ従来ロジックにフォールバック
+
     # カテゴリスコアに比例して各カテゴリの枠数を割り当てる。
     # （全カテゴリを一括の新着順にすると、最近大量投入したカテゴリが枠を
     #   独占してしまうため。スコアの高いカテゴリほど多く出す）
@@ -150,6 +222,65 @@ def recommend_by_category(
         products.extend(supplements)
 
     return products
+
+
+def _hybrid_rerank(
+    db: Session,
+    user_id: int,
+    limit: int,
+    purchased_ids: List[int],
+    recommend_cat_scores: dict,
+    user_cat_scores: dict,
+    top_categories: List[str],
+    taste_vec: np.ndarray,
+) -> List[Product]:
+    """興味カテゴリの候補プールを、カテゴリ共起 × embedding類似度のハイブリッドで再ランクする"""
+    # 候補とするカテゴリ＝共起で選ばれた全カテゴリ ＋ ユーザーが実際に触れたカテゴリ
+    interest_categories = (
+        set(recommend_cat_scores.keys())
+        | set(user_cat_scores.keys())
+        | set(top_categories)
+    )
+    interest_categories.discard(None)
+    if not interest_categories:
+        return []
+
+    # カテゴリごとに新着を取得してプールに入れる。
+    # （全カテゴリ一括の新着順だと、大量投入されたカテゴリが新しさで枠を独占し、
+    #   好きなカテゴリの商品がプールから漏れてしまうため。各カテゴリの代表性を確保する）
+    per_cat = max(50, CANDIDATE_POOL // max(1, len(interest_categories)))
+    candidates = []
+    seen_ids = set()
+    for cat in interest_categories:
+        q = db.query(Product).filter(
+            Product.status == ProductStatus.available,
+            Product.seller_id != user_id,
+            Product.category == cat,
+        )
+        if purchased_ids:
+            q = q.filter(Product.id.notin_(purchased_ids))
+        for p in q.order_by(Product.created_at.desc()).limit(per_cat).all():
+            if p.id not in seen_ids:
+                candidates.append(p)
+                seen_ids.add(p.id)
+
+    if not candidates:
+        return []
+
+    # カテゴリ共起スコアを [0,1] に正規化（embedding類似度とスケールを揃える）
+    max_cat = max(recommend_cat_scores.values()) if recommend_cat_scores else 1.0
+    max_cat = max_cat or 1.0
+
+    scored = []
+    for p in candidates:
+        cat_component = recommend_cat_scores.get(p.category, 0.0) / max_cat
+        emb_component = _cosine(taste_vec, p.embedding) if p.embedding else 0.0
+        emb_component = max(0.0, emb_component)  # 負の類似度は0に
+        score = CAT_WEIGHT * cat_component + EMB_WEIGHT * emb_component
+        scored.append((score, p))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [p for _, p in scored[:limit]]
 
 
 def _recommend_popular(
