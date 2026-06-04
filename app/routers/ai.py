@@ -37,7 +37,6 @@ def generate_product_description(request: GenerateDescriptionRequest):
     model = _get_gemini_model()
 
     category_text = f"カテゴリ: {request.category}" if request.category else ""
-    price_text = f"価格: {request.price}円" if request.price else ""
     condition_text = f"商品の状態: {request.condition}" if request.condition else ""
 
     notes_block = ""
@@ -50,10 +49,10 @@ def generate_product_description(request: GenerateDescriptionRequest):
 
     prompt = f"""フリマアプリに出品する以下の商品の説明文を日本語で作成してください。
 できるだけ簡潔に、100文字以内でまとめてください。要点だけを伝え、冗長な前置きや過剰な装飾表現は避けてください。
+価格や金額（「600円」など）は説明文に含めないでください。価格はアプリ側で別途表示されるため、本文に書くと重複します。
 
 商品名: {request.title}
 {category_text}
-{price_text}
 {condition_text}
 {notes_block}
 
