@@ -46,7 +46,7 @@ class Product(Base):
     price = Column(Integer, nullable=False)
     category = Column(String(100), index=True)
     condition = Column(String(50), nullable=True)
-    image_url = Column(String(255))
+    image_url = Column(Text(length=16777215))  # Base64 data URI も格納できるよう MEDIUMTEXT
     status = Column(Enum(ProductStatus), default=ProductStatus.available, index=True)
     embedding = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
