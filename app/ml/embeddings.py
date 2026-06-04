@@ -3,7 +3,9 @@ from typing import Optional
 import numpy as np
 import google.generativeai as genai
 
-EMBEDDING_MODEL = "models/text-embedding-004"
+# text-embedding-004 は廃止され embedContent では 404 になるため、
+# 現行の gemini-embedding-001 を使用する（既定3072次元）。
+EMBEDDING_MODEL = "models/gemini-embedding-001"
 
 
 def get_embedding(text: str) -> Optional[list]:

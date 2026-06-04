@@ -10,7 +10,7 @@ import google.generativeai as genai
 from app.database import get_db
 from app.models import Product, ProductStatus
 from app.schemas import ProductResponse
-from app.ml.embeddings import get_embedding, cosine_similarity
+from app.ml.embeddings import get_embedding, cosine_similarity, EMBEDDING_MODEL
 
 router = APIRouter(prefix="/ai-set", tags=["ai-set"])
 
@@ -211,14 +211,14 @@ def embed_debug():
     info = {
         "has_key": bool(api_key),
         "key_prefix": (api_key[:6] + "...") if api_key else None,
-        "model": "models/text-embedding-004",
+        "model": EMBEDDING_MODEL,
     }
     if not api_key:
         info["result"] = "NO_API_KEY"
         return info
     try:
         genai.configure(api_key=api_key)
-        result = genai.embed_content(model="models/text-embedding-004", content="テスト商品 本・漫画")
+        result = genai.embed_content(model=EMBEDDING_MODEL, content="テスト商品 本・漫画")
         emb = result["embedding"]
         info["result"] = "OK"
         info["dims"] = len(emb)
