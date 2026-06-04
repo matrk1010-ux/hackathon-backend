@@ -46,7 +46,7 @@ def recommend_by_category(
         .all()
     )
 
-    # ユーザーのいいねカテゴリを頻度付きで取得（いいねは×2の重み）
+    # ユーザーのいいねカテゴリを頻度付きで取得（いいねは×5の重み）
     liked = (
         db.query(Product.category, func.count(Like.id).label("cnt"))
         .join(Like, Like.product_id == Product.id)
@@ -62,7 +62,7 @@ def recommend_by_category(
             user_cat_scores[cat] = user_cat_scores.get(cat, 0) + cnt
     for cat, cnt in liked:
         if cat:
-            user_cat_scores[cat] = user_cat_scores.get(cat, 0) + cnt * 2
+            user_cat_scores[cat] = user_cat_scores.get(cat, 0) + cnt * 5
 
     if not user_cat_scores:
         # 行動履歴がない場合は新着商品を返す
@@ -102,11 +102,26 @@ def recommend_by_category(
 
     products = query.order_by(Product.created_at.desc()).limit(limit).all()
 
-    # 足りなければ新着商品で補完
+    # 足りなければ「ユーザーの興味カテゴリ内」だけで補完する。
+    # （無関係な新着＝今は本・漫画でそのまま埋めない）
     if len(products) < limit:
-        existing_ids = [p.id for p in products]
-        supplements = _recommend_popular(
-            db, user_id, limit - len(products), purchased_ids + existing_ids
+        shown_ids = [p.id for p in products]
+        exclude_ids = purchased_ids + shown_ids
+        # 実際に見た/いいねしたカテゴリ ＋ 共起で選ばれた上位カテゴリ
+        interest_categories = list(set(top_categories) | set(user_cat_scores.keys()))
+
+        supp_query = db.query(Product).filter(
+            Product.status == ProductStatus.available,
+            Product.seller_id != user_id,
+            Product.category.in_(interest_categories),
+        )
+        if exclude_ids:
+            supp_query = supp_query.filter(Product.id.notin_(exclude_ids))
+
+        supplements = (
+            supp_query.order_by(Product.created_at.desc())
+            .limit(limit - len(products))
+            .all()
         )
         products.extend(supplements)
 
