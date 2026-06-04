@@ -14,7 +14,7 @@ from app.ml.embeddings import get_embedding, cosine_similarity
 
 router = APIRouter(prefix="/ai-set", tags=["ai-set"])
 
-SYSTEM_PROMPT = """あなたはフリマアプリのAIショッピングアシスタントです。
+SYSTEM_PROMPT = """あなたはフリマアプリ、EmporioのAIショッピングアシスタントです。
 ユーザーの要望に本当に合った商品だけを、アプリ内の実在商品から厳選して提案します。
 
 ルール：
@@ -29,7 +29,7 @@ SYSTEM_PROMPT = """あなたはフリマアプリのAIショッピングアシ�
 
 【出力フォーマット】
 返答の最後に、提案した商品を必ず以下のJSON形式で記載してください（このタグはユーザーには表示されません）：
-<SELECTED>[{"id": 1, "reason": "なぜこの商品を選んだかを15〜40字で簡潔に"}, {"id": 5, "reason": "..."}]</SELECTED>
+<SELECTED>[{"id": 1, "reason": "なぜこの商品を選んだかと共に、おすすめであるという内容を15〜40字で簡潔に"}, {"id": 5, "reason": "..."}]</SELECTED>
 1つも提案しない場合は <SELECTED>[]</SELECTED> と記載してください。
 reasonはその商品ならではの具体的な理由にすること（「おすすめです」のような汎用句は避ける）。"""
 
