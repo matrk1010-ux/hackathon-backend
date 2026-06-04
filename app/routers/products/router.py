@@ -86,14 +86,6 @@ def get_liked_products(
     """ユーザーがいいねした商品一覧を取得"""
     return interactions.get_liked_products(db, user_email, skip, limit)
 
-@router.delete("/views/{user_email}")
-def clear_view_history(
-    user_email: str,
-    db: Session = Depends(get_db)
-):
-    """ユーザーの閲覧履歴をすべて削除する"""
-    return interactions.clear_view_history(db, user_email)
-
 @router.post("/{product_id}/view")
 def record_product_view(
     product_id: int,

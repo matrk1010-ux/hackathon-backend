@@ -86,29 +86,6 @@ def bulk_buy_products(request: BulkPurchaseRequest, db: Session = Depends(get_db
     return BulkPurchaseResponse(purchased=purchased, failed=failed, total_price=total_price)
 
 
-@router.delete("/{purchase_id}/return", status_code=status.HTTP_200_OK)
-def return_product(purchase_id: int, buyer_email: str = Query(...), db: Session = Depends(get_db)):
-    """【開発用】購入を取り消して商品をavailableに戻す"""
-    buyer = db.query(User).filter(User.email == buyer_email).first()
-    if not buyer:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-    purchase = db.query(Purchase).filter(
-        Purchase.id == purchase_id,
-        Purchase.buyer_id == buyer.id,
-    ).first()
-    if not purchase:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Purchase not found")
-
-    product = db.query(Product).filter(Product.id == purchase.product_id).first()
-    if product:
-        product.status = ProductStatus.available
-
-    db.delete(purchase)
-    db.commit()
-    return {"message": "returned"}
-
-
 @router.get("/me", response_model=List[PurchaseWithDetails])
 def get_my_purchases(
     buyer_email: str = Query(...),
