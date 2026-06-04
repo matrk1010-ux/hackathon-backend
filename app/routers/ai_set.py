@@ -21,16 +21,17 @@ SYSTEM_PROMPT = """あなたはフリマアプリのAIショッピングアシ�
 - 必ず提示された【候補商品】リストの中からのみ選ぶ
 - ユーザーの要望に関係のない商品は絶対に提案しない（無理に数を揃えない）
 - 本当に関係する商品が1つもなければ、正直に「該当する商品が見つかりませんでした」と伝える
-- 各商品を提案する理由を一言添える
 - 会話の文脈を踏まえて条件の絞り込みにも対応する
 - 複数の選択肢（例：「5巻単品」と「全巻セット」のように内容が重複するもの）を出す場合は、
   必ず「どちらか一方を選んでください」と明記する（両方買うと重複するため）
-- 返答は日本語で、親しみやすいトーンで200文字程度にまとめる
+- 本文（ユーザーに見える返答）は、全体としてなぜこのセットを薦めるのかを親しみやすいトーンで150文字程度にまとめる。
+  個々の商品ごとの理由は本文に書かず、後述のJSONのreasonに書くこと（重複を避ける）
 
 【出力フォーマット】
-返答の最後に、実際に提案した商品のIDを必ず以下のJSON形式で記載してください（ユーザーには表示されません）：
-<SELECTED>[1, 5, 6]</SELECTED>
-1つも提案しない場合は <SELECTED>[]</SELECTED> と記載してください。"""
+返答の最後に、提案した商品を必ず以下のJSON形式で記載してください（このタグはユーザーには表示されません）：
+<SELECTED>[{"id": 1, "reason": "なぜこの商品を選んだかを15〜40字で簡潔に"}, {"id": 5, "reason": "..."}]</SELECTED>
+1つも提案しない場合は <SELECTED>[]</SELECTED> と記載してください。
+reasonはその商品ならではの具体的な理由にすること（「おすすめです」のような汎用句は避ける）。"""
 
 TOP_K = 6
 
@@ -49,6 +50,7 @@ class AiSetChatRequest(BaseModel):
 class AiSetChatResponse(BaseModel):
     reply: str
     suggested_products: list[ProductResponse]
+    reasons: dict[int, str] = {}  # 商品ID -> 提案理由
 
 
 def in_budget(price: int, min_budget: Optional[int], max_budget: Optional[int]) -> bool:
@@ -135,22 +137,38 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
     response = chat.send_message(user_message + product_context)
     raw_text = response.text.strip()
 
-    # Step 5: Geminiが選んだ商品IDを抽出し、それだけをカード表示
-    selected_ids = []
+    # Step 5: Geminiが選んだ商品ID＋理由を抽出し、それだけをカード表示
+    selected = []
     match = re.search(r"<SELECTED>\s*(\[.*?\])\s*</SELECTED>", raw_text, re.DOTALL)
     if match:
         try:
-            selected_ids = json.loads(match.group(1))
+            selected = json.loads(match.group(1))
         except Exception:
-            selected_ids = []
+            selected = []
     reply = re.sub(r"<SELECTED>.*?</SELECTED>", "", raw_text, flags=re.DOTALL).strip()
+
+    # 各要素は {"id": int, "reason": str} を想定。後方互換で素のint配列も許容する。
+    selected_ids = []
+    reasons: dict[int, str] = {}
+    for item in selected:
+        if isinstance(item, dict):
+            pid = item.get("id")
+            if isinstance(pid, int):
+                selected_ids.append(pid)
+                reason = item.get("reason")
+                if isinstance(reason, str) and reason.strip():
+                    reasons[pid] = reason.strip()
+        elif isinstance(item, int):
+            selected_ids.append(item)
 
     candidate_map = {p.id: p for p in candidates}
     suggested_products = [candidate_map[i] for i in selected_ids if i in candidate_map]
+    reasons = {pid: r for pid, r in reasons.items() if pid in candidate_map}
 
     return AiSetChatResponse(
         reply=reply,
         suggested_products=suggested_products,
+        reasons=reasons,
     )
 
 
