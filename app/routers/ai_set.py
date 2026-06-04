@@ -200,6 +200,29 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
     return AiSetChatResponse(reply=reply, plans=plans)
 
 
+@router.get("/embed-status")
+def embed_status(db: Session = Depends(get_db)):
+    """embedding の付与状況を集計して返す（読み取り専用・データ変更なし）。
+
+    available な商品のうち何件に embedding が無いか把握するための診断用。
+    """
+    total = db.query(Product).count()
+    without_emb = db.query(Product).filter(Product.embedding.is_(None)).count()
+    available_total = db.query(Product).filter(Product.status == ProductStatus.available).count()
+    available_without_emb = db.query(Product).filter(
+        Product.status == ProductStatus.available,
+        Product.embedding.is_(None),
+    ).count()
+    return {
+        "total": total,
+        "without_embedding": without_emb,
+        "with_embedding": total - without_emb,
+        "available_total": available_total,
+        "available_without_embedding": available_without_emb,
+        "available_with_embedding": available_total - available_without_emb,
+    }
+
+
 @router.post("/embed-all")
 def embed_all_products(db: Session = Depends(get_db)):
     """embeddingがない既存商品に一括でembeddingを生成する"""
