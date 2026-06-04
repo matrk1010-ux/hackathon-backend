@@ -200,6 +200,35 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
     return AiSetChatResponse(reply=reply, plans=plans)
 
 
+@router.get("/embed-debug")
+def embed_debug():
+    """embedding 生成を1回だけ実行し、成功なら次元数・失敗なら例外内容を返す診断用。
+
+    get_embedding は例外を握りつぶすため、失敗の真因（権限/モデル名/クォータ等）を
+    特定できるよう、ここでは例外をそのまま文字列化して返す。
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    info = {
+        "has_key": bool(api_key),
+        "key_prefix": (api_key[:6] + "...") if api_key else None,
+        "model": "models/text-embedding-004",
+    }
+    if not api_key:
+        info["result"] = "NO_API_KEY"
+        return info
+    try:
+        genai.configure(api_key=api_key)
+        result = genai.embed_content(model="models/text-embedding-004", content="テスト商品 本・漫画")
+        emb = result["embedding"]
+        info["result"] = "OK"
+        info["dims"] = len(emb)
+    except Exception as e:
+        info["result"] = "ERROR"
+        info["error_type"] = type(e).__name__
+        info["error_message"] = str(e)[:500]
+    return info
+
+
 @router.get("/embed-status")
 def embed_status(db: Session = Depends(get_db)):
     """embedding の付与状況を集計して返す（読み取り専用・データ変更なし）。
