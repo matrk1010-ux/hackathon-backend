@@ -23,11 +23,12 @@ CATEGORY_SIMILARITY = _load_similarity()
 # ==================== メイン推薦関数 ====================
 
 def recommend_by_category(
-    db: Session, user_id: int, limit: int = 10
+    db: Session, user_id: int, limit: int = 10, category: str = None
 ) -> List[Product]:
     """
     MerRecで学習したカテゴリ共起スコアを使ってレコメンドする。
     category_similarity.json がない場合はフォールバックとして新着順を返す。
+    category を指定した場合は、そのカテゴリの商品だけに絞ってレコメンドする。
     """
     # 購入済み商品IDを除外リストに
     purchased_ids = [
@@ -36,6 +37,17 @@ def recommend_by_category(
         .filter(Purchase.buyer_id == user_id)
         .all()
     ]
+
+    # カテゴリ指定時は、そのカテゴリ内の出品から（自分・購入済みを除く）新着順で返す
+    if category:
+        cat_query = db.query(Product).filter(
+            Product.status == ProductStatus.available,
+            Product.seller_id != user_id,
+            Product.category == category,
+        )
+        if purchased_ids:
+            cat_query = cat_query.filter(Product.id.notin_(purchased_ids))
+        return cat_query.order_by(Product.created_at.desc()).limit(limit).all()
 
     # ユーザーの閲覧カテゴリを頻度付きで取得
     viewed = (
