@@ -224,11 +224,30 @@ def embed_status(db: Session = Depends(get_db)):
 
 
 @router.post("/embed-all")
-def embed_all_products(db: Session = Depends(get_db)):
-    """embeddingがない既存商品に一括でembeddingを生成する"""
-    products = db.query(Product).filter(Product.embedding.is_(None)).all()
+def embed_all_products(
+    db: Session = Depends(get_db),
+    limit: int = 200,
+    batch: int = 50,
+):
+    """embeddingがない既存商品にembeddingを生成する（バッチ処理）。
+
+    Cloud Run のリクエストタイムアウト（既定300秒）で全ロールバックしないよう、
+    一度に処理する件数を ``limit`` で絞り、``batch`` 件ごとに commit する。
+    NULL の商品だけが対象なので、分割して繰り返し叩けば全件を安全に埋められる。
+
+    - ``limit``: この呼び出しで処理する最大件数（既定200）
+    - ``batch``: 何件ごとに commit するか（既定50）
+
+    返り値の ``remaining`` が 0 になるまで繰り返し呼び出すこと。
+    """
+    products = (
+        db.query(Product)
+        .filter(Product.embedding.is_(None))
+        .limit(limit)
+        .all()
+    )
     success, failed = 0, 0
-    for product in products:
+    for i, product in enumerate(products):
         text = f"{product.title} {product.category or ''} {product.description or ''}"
         embedding = get_embedding(text)
         if embedding:
@@ -236,5 +255,14 @@ def embed_all_products(db: Session = Depends(get_db)):
             success += 1
         else:
             failed += 1
+        # batch 件ごとに途中 commit（タイムアウト時も進捗を保全）
+        if (i + 1) % max(1, batch) == 0:
+            db.commit()
     db.commit()
-    return {"success": success, "failed": failed, "total": len(products)}
+    remaining = db.query(Product).filter(Product.embedding.is_(None)).count()
+    return {
+        "processed": len(products),
+        "success": success,
+        "failed": failed,
+        "remaining": remaining,
+    }
