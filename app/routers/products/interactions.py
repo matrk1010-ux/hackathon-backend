@@ -26,6 +26,26 @@ def get_liked_products(db: Session, user_email: str, skip: int = 0, limit: int =
     return products
 
 
+def clear_view_history(db: Session, user_email: str):
+    """指定ユーザーの閲覧履歴をすべて削除する"""
+    user = db.query(User).filter(User.email == user_email).first()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    deleted = (
+        db.query(UserView)
+        .filter(UserView.user_id == user.id)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+
+    return {"message": "View history cleared", "deleted": deleted}
+
+
 def record_view(db: Session, product_id: int, user_email: str):
     """商品の閲覧を記録"""
     user = db.query(User).filter(User.email == user_email).first()
