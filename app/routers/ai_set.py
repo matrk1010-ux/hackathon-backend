@@ -10,7 +10,7 @@ import google.generativeai as genai
 from app.database import get_db
 from app.models import Product, ProductStatus
 from app.schemas import ProductResponse
-from app.ml.embeddings import get_embedding, cosine_similarity, EMBEDDING_MODEL
+from app.ml.embeddings import get_embedding, cosine_similarity
 
 router = APIRouter(prefix="/ai-set", tags=["ai-set"])
 
@@ -198,67 +198,6 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
             break
 
     return AiSetChatResponse(reply=reply, plans=plans)
-
-
-@router.get("/embed-debug")
-def embed_debug():
-    """embedding 生成を1回だけ実行し、成功なら次元数・失敗なら例外内容を返す診断用。
-
-    get_embedding は例外を握りつぶすため、失敗の真因（権限/モデル名/クォータ等）を
-    特定できるよう、ここでは例外をそのまま文字列化して返す。
-    """
-    api_key = os.getenv("GEMINI_API_KEY")
-    info = {
-        "has_key": bool(api_key),
-        "key_prefix": (api_key[:6] + "...") if api_key else None,
-        "model": EMBEDDING_MODEL,
-    }
-    if not api_key:
-        info["result"] = "NO_API_KEY"
-        return info
-    try:
-        genai.configure(api_key=api_key)
-        result = genai.embed_content(model=EMBEDDING_MODEL, content="テスト商品 本・漫画")
-        emb = result["embedding"]
-        info["result"] = "OK"
-        info["dims"] = len(emb)
-    except Exception as e:
-        info["result"] = "ERROR"
-        info["error_type"] = type(e).__name__
-        info["error_message"] = str(e)[:500]
-    # embedContent をサポートする実在モデルを列挙する
-    try:
-        embed_models = []
-        for m in genai.list_models():
-            if "embedContent" in getattr(m, "supported_generation_methods", []):
-                embed_models.append(m.name)
-        info["embed_models"] = embed_models
-    except Exception as e:
-        info["list_models_error"] = f"{type(e).__name__}: {str(e)[:300]}"
-    return info
-
-
-@router.get("/embed-status")
-def embed_status(db: Session = Depends(get_db)):
-    """embedding の付与状況を集計して返す（読み取り専用・データ変更なし）。
-
-    available な商品のうち何件に embedding が無いか把握するための診断用。
-    """
-    total = db.query(Product).count()
-    without_emb = db.query(Product).filter(Product.embedding.is_(None)).count()
-    available_total = db.query(Product).filter(Product.status == ProductStatus.available).count()
-    available_without_emb = db.query(Product).filter(
-        Product.status == ProductStatus.available,
-        Product.embedding.is_(None),
-    ).count()
-    return {
-        "total": total,
-        "without_embedding": without_emb,
-        "with_embedding": total - without_emb,
-        "available_total": available_total,
-        "available_without_embedding": available_without_emb,
-        "available_with_embedding": available_total - available_without_emb,
-    }
 
 
 @router.post("/embed-all")

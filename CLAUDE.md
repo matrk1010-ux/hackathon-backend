@@ -5,7 +5,7 @@ Emporio（エンボリオ）の API。UTTC AIコース ハッカソン提出物�
 ## 技術スタック
 - FastAPI + SQLAlchemy 2.0 + MySQL（Cloud SQL）、ドライバは PyMySQL
 - 生成AI：Google Gemini `gemini-2.5-flash`（説明生成・画像解析・AIセット会話）
-- 埋め込み：`models/text-embedding-004`（商品・クエリの embedding）
+- 埋め込み：`models/gemini-embedding-001`（商品・クエリの embedding。旧 text-embedding-004 は廃止され embedContent で404になる）
 - Python 3.11（Docker は `python:3.11-slim`）
 
 ## アーキテクチャ規約
@@ -33,7 +33,8 @@ Emporio（エンボリオ）の API。UTTC AIコース ハッカソン提出物�
 
 ## AI / 推薦の不変条件（壊しやすいので注意）
 - Gemini キー未設定時は **503** を返し本体機能は継続。embedding 生成失敗時も **出品自体は成功**（劣化動作）。
-- AIセットの出力契約：本文末尾の `<SELECTED>[{"id":int,"reason":str}]</SELECTED>` タグ。**プロンプトを変えるならパーサ（`ai_set.py`）も必ず合わせる。**
+- AIセットの出力契約：本文末尾の `<PLANS>[{"title":str,"reason":str,"ids":[int,...]}]</PLANS>` タグ（最大3つの「買い方プラン」）。**プロンプトを変えるならパーサ（`ai_set.py`）も必ず合わせる。** ids は候補に実在するもののみ採用、プラン内重複は排除。
+- embedding が無い商品は RAG 候補から除外される（`embedding.isnot(None)`）。大量シード後は `POST /ai-set/embed-all?limit=N&batch=M` を `remaining=0` まで繰り返して後埋めする。
 - 画像解析（`/ai/analyze-image`）は title/category/condition のみ。**説明文は生成しない**（説明肉付けAIと役割分担）。category/condition は選択肢に厳密一致しなければ `None` に落とす。
 - 推薦は全経路で `status==available` かつ `seller_id != user_id` かつ購入済み除外を守る。定数：`CAT_WEIGHT=0.4 / EMB_WEIGHT=0.6 / VIEW_WEIGHT=1.0 / LIKE_WEIGHT=5.0 / CANDIDATE_POOL=300`。
 
