@@ -83,14 +83,22 @@ SYSTEM_PROMPT = """あなたはフリマアプリ、EmporioのAIショッピン�
    所有分との重複ができるだけ少ないものを選び、重複が生じる場合は理由文でその旨を明記する。
 3. 重複は可能な限り少なくする。不足分を過不足なく満たせる組み合わせがあれば、それを最優先プランにする。
 
+【各プランに owned_overlap フラグを付ける（重要）】
+- owned_overlap は「そのプランに、ユーザーが既に持っていると述べた巻・アイテムが含まれるか」を表す真偽値。
+  - 既所有分を一切含まない（不足分だけ）プラン → false
+  - 既所有分を含む（全巻セット等で持っている巻も再度買うことになる）プラン → true
+- ユーザーが所有を明言していない（普通の買い物）場合は、全プラン false でよい。
+- これは、不足分だけのプランがある時に重複プランを自動で隠すために使う。正確に付けること。
+
 本文（ユーザーに見える返答）は、どんなプランを用意したかを親しみやすいトーンで150文字程度に要約する。
 各プランの個別の理由は本文に書かず、後述のJSONのreasonに書くこと（重複を避ける）。
 
 【出力フォーマット】
 返答の最後に、提案を必ず以下のJSON形式で記載してください（このタグはユーザーには表示されません）。プランは最大3つ：
-<PLANS>[{"title": "不足分だけ揃える", "reason": "このプランを薦める理由を15〜50字で", "ids": [22, 23]}, {"title": "一気に全部揃える", "reason": "...", "ids": [100]}]</PLANS>
+<PLANS>[{"title": "不足分だけ揃える", "reason": "このプランを薦める理由を15〜50字で", "ids": [22, 23], "owned_overlap": false}, {"title": "一気に全部揃える", "reason": "...", "ids": [100], "owned_overlap": true}]</PLANS>
 提案できるプランが1つもなければ <PLANS>[]</PLANS> と記載してください。
-ids は【候補商品】に実在するIDのみ。reason はそのプランならではの具体的な内容にすること（「おすすめです」のような汎用句は避ける）。"""
+ids は【候補商品】に実在するIDのみ。reason はそのプランならではの具体的な内容にすること（「おすすめです」のような汎用句は避ける）。
+owned_overlap は上記ルールに従い必ず各プランに付けること（不明なら false）。"""
 
 # RAGで候補としてGeminiに渡す件数。シリーズ物（同一作品の多数の巻）でも
 # 不足巻が候補から漏れないよう、やや多めに確保する。
@@ -293,6 +301,7 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
 
     candidate_map = {p.id: p for p in candidates}
     plans: list[AiSetPlan] = []
+    overlaps: list[bool] = []  # 各プランが既所有分と重複するか（plansと同順）
     for item in plans_raw:
         if not isinstance(item, dict):
             continue
@@ -315,8 +324,13 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
                 total_price=sum(p.price for p in products),
             )
         )
+        overlaps.append(bool(item.get("owned_overlap")))
         if len(plans) >= 3:
             break
+
+    # 既所有分と重複しないプランが1つでもあれば、重複するプランは表示しない
+    if any(not o for o in overlaps):
+        plans = [p for p, o in zip(plans, overlaps) if not o]
 
     # 一言ラベル付与＋コスパ順（おすすめを先頭）に並べ替え
     plans = annotate_and_sort_plans(plans)
