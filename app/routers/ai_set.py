@@ -113,11 +113,74 @@ class AiSetPlan(BaseModel):
     reason: str = ""                 # そのプランを薦める理由
     products: list[ProductResponse]  # プランに含まれる商品（互いに重複しない）
     total_price: int                 # プランの合計金額
+    label: str = ""                  # コードが付ける一言（例「安さ重視ならこちら」）
+    recommended: bool = False        # コスパ最良で最上位に出すプラン
 
 
 class AiSetChatResponse(BaseModel):
     reply: str
-    plans: list[AiSetPlan] = []      # 最大3つの「買い方プラン」
+    plans: list[AiSetPlan] = []      # 最大3つの「買い方プラン」（おすすめ順）
+
+
+# 状態（コンディション）を良い順に 0..5 で数値化。不明は中間 3 として扱う。
+CONDITION_RANK = {
+    "新品・未使用": 0,
+    "未使用に近い": 1,
+    "目立った傷や汚れなし": 2,
+    "やや傷や汚れあり": 3,
+    "傷や汚れあり": 4,
+    "全体的に状態が悪い": 5,
+}
+
+
+def _avg_condition_rank(plan: "AiSetPlan") -> float:
+    """プラン内商品の状態ランク平均（小さいほど状態が良い）。"""
+    ranks = [CONDITION_RANK.get(p.condition, 3) for p in plan.products]
+    return sum(ranks) / len(ranks) if ranks else 3.0
+
+
+def annotate_and_sort_plans(plans: list["AiSetPlan"]) -> list["AiSetPlan"]:
+    """プランに一言ラベルを付け、コスパ（安さ0.6＋状態0.4）順に並べ替える。
+
+    - 値段と状態を各プラン間で正規化し、総合スコアが最良のものを最上位＝おすすめに。
+    - 最安プランには「安さ重視ならこちら」、最も状態が良いプランには「より状態が綺麗」。
+    - プランが1つだけのときは並べ替え不要（そのプランをおすすめ扱い）。
+    """
+    if len(plans) <= 1:
+        if plans:
+            plans[0].recommended = True
+        return plans
+
+    prices = [p.total_price for p in plans]
+    conds = [_avg_condition_rank(p) for p in plans]
+    pmin, pmax = min(prices), max(prices)
+    cmin, cmax = min(conds), max(conds)
+
+    def norm(v: float, lo: float, hi: float) -> float:
+        return 0.0 if hi == lo else (v - lo) / (hi - lo)
+
+    # 小さいほど良いスコア（安さ重視のコスパ）
+    scores = [
+        0.6 * norm(prices[i], pmin, pmax) + 0.4 * norm(conds[i], cmin, cmax)
+        for i in range(len(plans))
+    ]
+    cheapest_i = min(range(len(plans)), key=lambda i: (prices[i], conds[i]))
+    best_cond_i = min(range(len(plans)), key=lambda i: (conds[i], prices[i]))
+
+    for i, p in enumerate(plans):
+        if i == cheapest_i and i == best_cond_i:
+            p.label = "安さも状態も◎"
+        elif i == cheapest_i:
+            p.label = "安さ重視ならこちら"
+        elif i == best_cond_i:
+            p.label = "より状態が綺麗"
+        else:
+            p.label = "バランス重視"
+
+    order = sorted(range(len(plans)), key=lambda i: (scores[i], prices[i]))
+    sorted_plans = [plans[i] for i in order]
+    sorted_plans[0].recommended = True
+    return sorted_plans
 
 
 def in_budget(price: int, min_budget: Optional[int], max_budget: Optional[int]) -> bool:
@@ -254,6 +317,9 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
         )
         if len(plans) >= 3:
             break
+
+    # 一言ラベル付与＋コスパ順（おすすめを先頭）に並べ替え
+    plans = annotate_and_sort_plans(plans)
 
     return AiSetChatResponse(reply=reply, plans=plans)
 
