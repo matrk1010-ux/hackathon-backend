@@ -175,7 +175,7 @@ def annotate_and_sort_plans(plans: list["AiSetPlan"]) -> list["AiSetPlan"]:
         elif i == best_cond_i:
             p.label = "より状態が綺麗"
         else:
-            p.label = "バランス重視"
+            p.label = ""
 
     order = sorted(range(len(plans)), key=lambda i: (scores[i], prices[i]))
     sorted_plans = [plans[i] for i in order]
