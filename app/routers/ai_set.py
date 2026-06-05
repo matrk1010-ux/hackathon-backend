@@ -1,18 +1,63 @@
 import os
 import re
 import json
+import time
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+import numpy as np
 import google.generativeai as genai
 
 from app.database import get_db
 from app.models import Product, ProductStatus
 from app.schemas import ProductResponse
-from app.ml.embeddings import get_embedding, cosine_similarity
+from app.ml.embeddings import get_embedding
 
 router = APIRouter(prefix="/ai-set", tags=["ai-set"])
+
+# 商品embeddingの行列キャッシュ。毎リクエストで全商品のembedding(JSON)を
+# ORMロードすると時間もメモリも破綻する（数千件×数千次元）。正規化済みの
+# float32行列としてプロセス内に保持し、TTLの間はDBアクセス無しで使い回す。
+_EMB_CACHE: dict = {"ids": None, "matrix": None, "ts": 0.0}
+_EMB_CACHE_TTL = 120  # 秒。新規出品はこの猶予後にRAG候補へ反映される。
+
+
+def _get_embedding_matrix(db: Session):
+    """available かつ embedding を持つ商品の (id一覧, 正規化済みfloat32行列) を返す。
+
+    yield_per でストリーミングし、行列へ逐次コピーしてからPythonリストを捨てるため、
+    全件のJSONを同時にメモリへ抱えない。結果は TTL の間キャッシュする。
+    """
+    now = time.time()
+    if _EMB_CACHE["matrix"] is not None and (now - _EMB_CACHE["ts"]) < _EMB_CACHE_TTL:
+        return _EMB_CACHE["ids"], _EMB_CACHE["matrix"]
+
+    ids: list = []
+    vecs: list = []
+    q = (
+        db.query(Product.id, Product.embedding)
+        .filter(
+            Product.status == ProductStatus.available,
+            Product.embedding.isnot(None),
+        )
+        .yield_per(200)
+    )
+    for pid, emb in q:
+        if emb:
+            ids.append(pid)
+            vecs.append(np.asarray(emb, dtype=np.float32))
+
+    if vecs:
+        matrix = np.vstack(vecs)
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        matrix = matrix / norms
+    else:
+        matrix = None
+
+    _EMB_CACHE.update({"ids": ids, "matrix": matrix, "ts": now})
+    return ids, matrix
 
 SYSTEM_PROMPT = """あなたはフリマアプリ、EmporioのAIショッピングアシスタントです。
 ユーザーの要望に本当に合った商品だけを、アプリ内の実在商品から厳選して提案します。
@@ -109,23 +154,36 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
     query_embedding = get_embedding(user_message)
 
     if query_embedding:
-        products_with_emb = db.query(Product).filter(
-            Product.status == ProductStatus.available,
-            Product.embedding.isnot(None),
-        ).all()
+        ids, matrix = _get_embedding_matrix(db)
+        if matrix is not None and len(ids) > 0:
+            q = np.asarray(query_embedding, dtype=np.float32)
+            qn = np.linalg.norm(q)
+            if qn > 0:
+                q = q / qn
+            # 正規化済み行列との内積＝コサイン類似度を一括計算
+            scores = matrix @ q
+            # 予算で絞られる分を見込み、TOP_K より多めに上位を取り出す
+            k = min(len(ids), TOP_K * 4)
+            top_idx = np.argpartition(-scores, k - 1)[:k]
+            top_idx = top_idx[np.argsort(-scores[top_idx])]
+            top_ids = [ids[i] for i in top_idx]
 
-        products_with_emb = [
-            p for p in products_with_emb
-            if in_budget(p.price, request.min_budget, request.max_budget)
-        ]
-
-        if products_with_emb:
-            scored = [
-                (cosine_similarity(query_embedding, p.embedding), p)
-                for p in products_with_emb
-            ]
-            scored.sort(key=lambda x: x[0], reverse=True)
-            candidates = [p for _, p in scored[:TOP_K]]
+            # 上位候補だけを実体取得（在庫変化に追従するため status を再確認）
+            prod_map = {
+                p.id: p
+                for p in db.query(Product)
+                .filter(
+                    Product.id.in_(top_ids),
+                    Product.status == ProductStatus.available,
+                )
+                .all()
+            }
+            for pid in top_ids:
+                p = prod_map.get(pid)
+                if p and in_budget(p.price, request.min_budget, request.max_budget):
+                    candidates.append(p)
+                    if len(candidates) >= TOP_K:
+                        break
 
     # Step 2: embeddingがある商品が0件なら全商品を候補として渡す
     if not candidates:
