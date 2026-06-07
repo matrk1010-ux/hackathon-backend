@@ -39,6 +39,7 @@ def _get_embedding_matrix(db: Session):
         db.query(Product.id, Product.embedding)
         .filter(
             Product.status == ProductStatus.available,
+            Product.hidden_by_penalty == False,  # noqa: E712
             Product.embedding.isnot(None),
         )
         .yield_per(200)
@@ -201,7 +202,10 @@ def in_budget(price: int, min_budget: Optional[int], max_budget: Optional[int]) 
 
 def get_all_available(db: Session, min_budget: Optional[int], max_budget: Optional[int]) -> list:
     """embeddingがない場合のフォールバック：全商品をGeminiに渡す"""
-    q = db.query(Product).filter(Product.status == ProductStatus.available)
+    q = db.query(Product).filter(
+        Product.status == ProductStatus.available,
+        Product.hidden_by_penalty == False,  # noqa: E712
+    )
     if min_budget is not None:
         q = q.filter(Product.price >= min_budget)
     if max_budget is not None:
@@ -246,6 +250,7 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
                 .filter(
                     Product.id.in_(top_ids),
                     Product.status == ProductStatus.available,
+                    Product.hidden_by_penalty == False,  # noqa: E712
                 )
                 .all()
             }

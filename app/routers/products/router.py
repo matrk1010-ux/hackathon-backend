@@ -1,9 +1,10 @@
 # エンドポイント定義
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.database import get_db
 from app.schemas import ProductCreate, ProductUpdate, ProductResponse, ProductWithSeller
+from app.ml.resale import assess_product_in_background
 from . import crud, list as product_list, interactions
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -13,11 +14,15 @@ router = APIRouter(prefix="/products", tags=["products"])
 @router.post("/", response_model=ProductResponse)
 def create_product(
     product: ProductCreate,
+    background_tasks: BackgroundTasks,
     seller_email: str = Query(...),
     db: Session = Depends(get_db)
 ):
-    """新しい商品を出品する"""
-    return crud.create_product(db, product, seller_email)
+    """新しい商品を出品する。出品成功後、転売判定を非同期で実行する。"""
+    db_product = crud.create_product(db, product, seller_email)
+    # 出品は即成功させ、重い転売判定（Gemini含む）は裏で実行する（失敗しても出品は有効）
+    background_tasks.add_task(assess_product_in_background, db_product.id)
+    return db_product
 
 @router.get("/", response_model=List[ProductResponse])
 def list_products_endpoint(
@@ -38,10 +43,11 @@ def list_products_endpoint(
 @router.get("/{product_id}", response_model=ProductWithSeller)
 def get_product_detail(
     product_id: int,
+    user_email: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
-    """商品詳細を取得"""
-    return crud.get_product_by_id(db, product_id)
+    """商品詳細を取得。段階2で非表示の商品は所有者本人以外には 404 を返す。"""
+    return crud.get_product_for_viewer(db, product_id, user_email)
 
 @router.put("/{product_id}", response_model=ProductResponse)
 def update_product(

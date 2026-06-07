@@ -103,6 +103,7 @@ def recommend_by_category(
     if category:
         cat_query = db.query(Product).filter(
             Product.status == ProductStatus.available,
+            Product.hidden_by_penalty == False,  # noqa: E712
             Product.seller_id != user_id,
             Product.category == category,
         )
@@ -187,6 +188,7 @@ def recommend_by_category(
 
         cat_query = db.query(Product).filter(
             Product.status == ProductStatus.available,
+            Product.hidden_by_penalty == False,  # noqa: E712
             Product.seller_id != user_id,
             Product.category == cat,
         )
@@ -208,6 +210,7 @@ def recommend_by_category(
 
         supp_query = db.query(Product).filter(
             Product.status == ProductStatus.available,
+            Product.hidden_by_penalty == False,  # noqa: E712
             Product.seller_id != user_id,
             Product.category.in_(interest_categories),
         )
@@ -254,6 +257,7 @@ def _hybrid_rerank(
     for cat in interest_categories:
         q = db.query(Product).filter(
             Product.status == ProductStatus.available,
+            Product.hidden_by_penalty == False,  # noqa: E712
             Product.seller_id != user_id,
             Product.category == cat,
         )
@@ -289,6 +293,7 @@ def _recommend_popular(
     """新着商品を返すフォールバック"""
     query = db.query(Product).filter(
         Product.status == ProductStatus.available,
+        Product.hidden_by_penalty == False,  # noqa: E712
         Product.seller_id != user_id,
     )
     if exclude_ids:

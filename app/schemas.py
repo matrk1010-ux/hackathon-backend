@@ -68,7 +68,9 @@ class ProductResponse(ProductBase):
     status: ProductStatusSchema
     created_at: datetime
     updated_at: datetime
-    
+    resale_flagged: bool = False       # 段階1: 買い手向け「転売の可能性」バッジ
+    hidden_by_penalty: bool = False    # 段階2: 公開導線から非表示（本人マイページ用）
+
     class Config:
         from_attributes = True
 

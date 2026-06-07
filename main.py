@@ -10,6 +10,7 @@ from app.routers.purchases import router as purchases_router
 from app.routers.ai import router as ai_router
 from app.routers.recommendations import router as recommendations_router
 from app.routers.ai_set import router as ai_set_router
+from app.routers.resale import router as resale_router
 from app.database import engine
 
 load_dotenv('.env.local')
@@ -20,6 +21,34 @@ def run_migrations():
         "ALTER TABLE products ADD COLUMN embedding JSON",
         "ALTER TABLE products ADD COLUMN `condition` VARCHAR(50)",
         "ALTER TABLE products MODIFY image_url MEDIUMTEXT",
+        # ===== 転売対策: users 累積スコア =====
+        "ALTER TABLE users ADD COLUMN resale_score FLOAT NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN resale_score_updated_at DATETIME NULL",
+        "ALTER TABLE users ADD COLUMN resale_stage INT NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN resale_flagged_at DATETIME NULL",
+        # ===== 転売対策: products 出品単位の結果 =====
+        "ALTER TABLE products ADD COLUMN resale_score FLOAT NULL",
+        "ALTER TABLE products ADD COLUMN resale_flagged BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE products ADD COLUMN hidden_by_penalty BOOLEAN NOT NULL DEFAULT FALSE",
+        "CREATE INDEX idx_products_resale_flagged ON products (resale_flagged)",
+        "CREATE INDEX idx_products_hidden_penalty ON products (hidden_by_penalty)",
+        # ===== 転売対策: 判定の監査テーブル（create_all 不在のため明示作成） =====
+        """CREATE TABLE IF NOT EXISTS resale_assessments (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            product_id INT NULL,
+            score FLOAT NOT NULL,
+            is_new BOOLEAN DEFAULT FALSE,
+            is_mass_produced BOOLEAN DEFAULT FALSE,
+            gate_passed BOOLEAN DEFAULT FALSE,
+            dup_count INT DEFAULT 0,
+            recent_count INT DEFAULT 0,
+            list_price INT NULL,
+            price_ratio FLOAT NULL,
+            price_confidence FLOAT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_resale_user_created (user_id, created_at)
+        )""",
     ]
     for sql in migrations:
         with engine.connect() as conn:
@@ -53,6 +82,7 @@ app.include_router(purchases_router)
 app.include_router(ai_router)
 app.include_router(recommendations_router)
 app.include_router(ai_set_router)
+app.include_router(resale_router)
 
 
 @app.get("/")

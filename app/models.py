@@ -28,7 +28,13 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
+    # 転売対策：累積スコア（最後の更新時点の値）と更新時刻。参照時に減衰させて使う。
+    resale_score = Column(Float, default=0.0, nullable=False)
+    resale_score_updated_at = Column(DateTime, nullable=True)
+    resale_stage = Column(Integer, default=0, nullable=False)  # 0=通常 1=警告 2=制限
+    resale_flagged_at = Column(DateTime, nullable=True)        # 段階1で本人に通知した時刻
+
     # リレーション
     products = relationship("Product", back_populates="seller", foreign_keys="Product.seller_id")
     purchases = relationship("Purchase", back_populates="buyer")
@@ -51,7 +57,12 @@ class Product(Base):
     embedding = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
+    # 転売対策：この出品のスコア／買い手向けバッジ／公開導線からの非表示フラグ
+    resale_score = Column(Float, nullable=True)             # この1出品の0-100スコア（未判定はNULL）
+    resale_flagged = Column(Boolean, default=False, nullable=False, index=True)   # 段階1: バッジ表示
+    hidden_by_penalty = Column(Boolean, default=False, nullable=False, index=True)  # 段階2: 公開導線から非表示
+
     # リレーション
     seller = relationship("User", back_populates="products", foreign_keys=[seller_id])
     purchases = relationship("Purchase", back_populates="product")
@@ -125,4 +136,33 @@ class Recommendation(Base):
     # リレーション
     user = relationship("User", back_populates="recommendations")
     product = relationship("Product", back_populates="recommended_by", foreign_keys=[recommended_product_id])
+
+
+class ResaleAssessment(Base):
+    """出品ごとの転売判定結果（シグナル内訳・監査用）。
+
+    内訳はユーザーには非開示だが、運営確認・発表説明・減衰計算の原資として保持する。
+    """
+    __tablename__ = "resale_assessments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=True, index=True)
+    score = Column(Float, nullable=False)            # この出品の0-100スコア
+    # 主シグナル（ゲート）
+    is_new = Column(Boolean, default=False)
+    is_mass_produced = Column(Boolean, default=False)
+    gate_passed = Column(Boolean, default=False)
+    # 補助シグナル
+    dup_count = Column(Integer, default=0)           # 同一商品の重複出品数
+    recent_count = Column(Integer, default=0)        # 直近の新品出品数
+    list_price = Column(Integer, nullable=True)      # 取得した定価
+    price_ratio = Column(Float, nullable=True)       # 出品価格 / 定価
+    price_confidence = Column(Float, nullable=True)  # 定価情報の確信度 0-1
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    # インデックス（ユーザー単位＋時系列で減衰計算しやすく）
+    __table_args__ = (
+        Index('idx_resale_user_created', 'user_id', 'created_at'),
+    )
 

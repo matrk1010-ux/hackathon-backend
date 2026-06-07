@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 from app.models import Product, User, ProductStatus, Like, UserView, Recommendation
 from app.schemas import ProductCreate, ProductUpdate
 from app.ml.embeddings import get_embedding
+from app.ml.resale import current_user_stage
+from app.resale_config import STAGE2_THRESHOLD
 from datetime import datetime
 
 def get_product_by_id(db: Session, product_id: int):
@@ -16,16 +18,35 @@ def get_product_by_id(db: Session, product_id: int):
         )
     return product
 
+def get_product_for_viewer(db: Session, product_id: int, viewer_email: str = None):
+    """閲覧者を考慮して商品を取得。段階2で非表示の商品は所有者以外には 404。"""
+    product = get_product_by_id(db, product_id)
+    if product.hidden_by_penalty:
+        viewer = db.query(User).filter(User.email == viewer_email).first() if viewer_email else None
+        if not viewer or viewer.id != product.seller_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Product not found",
+            )
+    return product
+
 def create_product(db: Session, product: ProductCreate, seller_email: str):
     """新しい商品を作成"""
     seller = db.query(User).filter(User.email == seller_email).first()
-    
+
     if not seller:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
+
+    # 転売対策・段階2: 出品制限中のユーザーは新規出品をブロック（参照時減衰で判定）
+    if current_user_stage(seller) >= 2:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="転売の疑いにより現在新規出品が制限されています。",
+        )
+
     db_product = Product(
         seller_id=seller.id,
         title=product.title,

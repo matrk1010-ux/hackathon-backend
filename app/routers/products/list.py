@@ -16,8 +16,12 @@ def list_products(
     keyword: Optional[str] = None,
 ) -> List[Product]:
     """商品一覧を取得（検索・フィルタ対応）"""
-    query = db.query(Product).filter(Product.status == ProductStatus.available)
-    
+    # 転売対策・段階2: 公開導線では出品制限中ユーザーの商品を除外
+    query = db.query(Product).filter(
+        Product.status == ProductStatus.available,
+        Product.hidden_by_penalty == False,  # noqa: E712
+    )
+
     # カテゴリでフィルタ
     if category:
         query = query.filter(Product.category == category)
