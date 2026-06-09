@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -28,7 +29,31 @@ EMB_WEIGHT = 0.6   # β: embedding類似度（アイテム単位の好み）
 VIEW_WEIGHT = 1.0
 LIKE_WEIGHT = 5.0
 # 候補プールの上限（embedding再ランクの計算対象）
-CANDIDATE_POOL = 300
+# 1件あたり3072次元のJSON embeddingをロード＆パースするため、
+# 大きいと再ランクが重くなる。精度を大きく落とさない範囲で控えめに設定。
+CANDIDATE_POOL = 150
+
+# 推薦結果のキャッシュ（無カテゴリのパーソナライズ経路のみ）。
+# embeddingロード＋再ランクが重く毎回数十秒かかるため、ユーザー単位で
+# 短時間キャッシュして2回目以降を即時化する。TTL内はいいね/閲覧が
+# 反映されない点に注意（デモ用途では許容）。
+REC_CACHE_TTL = 300  # 秒
+_REC_CACHE: dict = {}
+
+
+def _get_cached_rec(user_id: int, limit: int):
+    entry = _REC_CACHE.get((user_id, limit))
+    if not entry:
+        return None
+    ts, products = entry
+    if time.time() - ts > REC_CACHE_TTL:
+        _REC_CACHE.pop((user_id, limit), None)
+        return None
+    return products
+
+
+def _set_cached_rec(user_id: int, limit: int, products: list):
+    _REC_CACHE[(user_id, limit)] = (time.time(), products)
 
 
 def _build_taste_vector(db: Session, user_id: int) -> Optional[np.ndarray]:
@@ -111,6 +136,19 @@ def recommend_by_category(
             cat_query = cat_query.filter(Product.id.notin_(purchased_ids))
         return cat_query.order_by(Product.created_at.desc()).limit(limit).all()
 
+    # --- 無カテゴリ＝パーソナライズ推薦（重い）。ユーザー単位で短時間キャッシュ ---
+    cached = _get_cached_rec(user_id, limit)
+    if cached is not None:
+        return cached
+    result = _recommend_personalized(db, user_id, limit, purchased_ids)
+    _set_cached_rec(user_id, limit, result)
+    return result
+
+
+def _recommend_personalized(
+    db: Session, user_id: int, limit: int, purchased_ids: List[int]
+) -> List[Product]:
+    """嗜好ベクトル × カテゴリ共起によるパーソナライズ推薦（無カテゴリ経路の本体）。"""
     # ユーザーの閲覧カテゴリを頻度付きで取得
     viewed = (
         db.query(Product.category, func.count(UserView.id).label("cnt"))
@@ -251,7 +289,7 @@ def _hybrid_rerank(
     # カテゴリごとに新着を取得してプールに入れる。
     # （全カテゴリ一括の新着順だと、大量投入されたカテゴリが新しさで枠を独占し、
     #   好きなカテゴリの商品がプールから漏れてしまうため。各カテゴリの代表性を確保する）
-    per_cat = max(50, CANDIDATE_POOL // max(1, len(interest_categories)))
+    per_cat = max(25, CANDIDATE_POOL // max(1, len(interest_categories)))
     candidates = []
     seen_ids = set()
     for cat in interest_categories:
