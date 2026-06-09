@@ -28,6 +28,11 @@ EMB_WEIGHT = 0.6   # β: embedding類似度（アイテム単位の好み）
 # 行動シグナルの重み（嗜好ベクトル作成時）
 VIEW_WEIGHT = 1.0
 LIKE_WEIGHT = 5.0
+# 嗜好ベクトルに使う行動履歴の上限（直近のみ）。
+# 履歴全件の3072次元embeddingをロード＆パースすると毎回数十秒かかるため、
+# 直近の行動だけを使う。recency重視は推薦としても自然。
+TASTE_LIKE_LIMIT = 100
+TASTE_VIEW_LIMIT = 200
 # 候補プールの上限（embedding再ランクの計算対象）
 # 1件あたり3072次元のJSON embeddingをロード＆パースするため、
 # 大きいと再ランクが重くなる。精度を大きく落とさない範囲で控えめに設定。
@@ -62,18 +67,22 @@ def _build_taste_vector(db: Session, user_id: int) -> Optional[np.ndarray]:
     weighted_sum = None
     total_weight = 0.0
 
-    # いいねした商品（強いシグナル）
+    # いいねした商品（強いシグナル）。直近 TASTE_LIKE_LIMIT 件のみ。
     liked_products = (
         db.query(Product.embedding)
         .join(Like, Like.product_id == Product.id)
         .filter(Like.user_id == user_id, Product.embedding.isnot(None))
+        .order_by(Like.liked_at.desc())
+        .limit(TASTE_LIKE_LIMIT)
         .all()
     )
-    # 閲覧した商品（弱いシグナル）
+    # 閲覧した商品（弱いシグナル）。直近 TASTE_VIEW_LIMIT 件のみ。
     viewed_products = (
         db.query(Product.embedding)
         .join(UserView, UserView.product_id == Product.id)
         .filter(UserView.user_id == user_id, Product.embedding.isnot(None))
+        .order_by(UserView.viewed_at.desc())
+        .limit(TASTE_VIEW_LIMIT)
         .all()
     )
 
