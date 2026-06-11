@@ -11,7 +11,7 @@ import google.generativeai as genai
 
 from app.database import get_db
 from app.models import Product, ProductStatus
-from app.schemas import ProductResponse
+from app.schemas import ProductWithSeller
 from app.ml.embeddings import get_embedding
 
 router = APIRouter(prefix="/ai-set", tags=["ai-set"])
@@ -120,7 +120,7 @@ class AiSetChatRequest(BaseModel):
 class AiSetPlan(BaseModel):
     title: str                       # 買い方の短いタイトル（例「不足分だけ揃える」）
     reason: str = ""                 # そのプランを薦める理由
-    products: list[ProductResponse]  # プランに含まれる商品（互いに重複しない）
+    products: list[ProductWithSeller]  # プランに含まれる商品（出品者情報つき・互いに重複しない）
     total_price: int                 # プランの合計金額
     label: str = ""                  # コードが付ける一言（例「安さ重視ならこちら」）
     recommended: bool = False        # コスパ最良で最上位に出すプラン
