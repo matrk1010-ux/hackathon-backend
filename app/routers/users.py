@@ -1,10 +1,13 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User
-from app.schemas import UserCreate, UserResponse
+from app.schemas import UserCreate, UserResponse, UserUpdate
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+MAX_USERNAME_LEN = 50
 
 
 @router.post("/sync", response_model=UserResponse)
@@ -31,6 +34,44 @@ def get_me(email: str, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == email).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return user
+
+
+@router.patch("/me", response_model=UserResponse)
+def update_me(email: str, user_update: UserUpdate, db: Session = Depends(get_db)):
+    """本人（メールで識別）のプロフィールを更新する。現状はユーザー名のみ。"""
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if user_update.username is not None:
+        new_name = user_update.username.strip()
+        if not new_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="ユーザー名を入力してください",
+            )
+        if len(new_name) > MAX_USERNAME_LEN:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"ユーザー名は{MAX_USERNAME_LEN}文字以内にしてください",
+            )
+        # ユーザー名は一意。自分以外が同名を使っていれば 409 で弾く
+        dup = (
+            db.query(User)
+            .filter(User.username == new_name, User.id != user.id)
+            .first()
+        )
+        if dup:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="このユーザー名は既に使われています",
+            )
+        user.username = new_name
+
+    user.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(user)
     return user
 
 

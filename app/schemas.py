@@ -29,6 +29,9 @@ class UserLogin(BaseModel):
     username: str
     password: str
 
+class UserUpdate(BaseModel):
+    username: Optional[str] = None  # 取引時の表示名。本人がマイページで変更できる
+
 class UserResponse(UserBase):
     id: int
     created_at: datetime
