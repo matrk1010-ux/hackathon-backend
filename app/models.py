@@ -52,7 +52,8 @@ class Product(Base):
     price = Column(Integer, nullable=False)
     category = Column(String(100), index=True)
     condition = Column(String(50), nullable=True)
-    image_url = Column(Text(length=16777215))  # Base64 data URI も格納できるよう MEDIUMTEXT
+    image_url = Column(Text(length=16777215))  # 一覧・カード用のサムネ（先頭画像）。Base64 data URI も格納できるよう MEDIUMTEXT
+    image_urls = Column(JSON, nullable=True)  # 全画像（最大5枚）の data URI 配列。詳細ページ用。先頭が image_url と一致
     status = Column(Enum(ProductStatus), default=ProductStatus.available, index=True)
     embedding = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

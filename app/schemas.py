@@ -51,7 +51,7 @@ class ProductBase(BaseModel):
     image_url: Optional[str] = None
 
 class ProductCreate(ProductBase):
-    pass
+    image_urls: Optional[List[str]] = None  # 出品時の全画像（最大5枚）。先頭が image_url に採用される
 
 class ProductUpdate(BaseModel):
     title: Optional[str] = None
@@ -60,9 +60,13 @@ class ProductUpdate(BaseModel):
     category: Optional[str] = None
     condition: Optional[str] = None
     image_url: Optional[str] = None
+    image_urls: Optional[List[str]] = None
     status: Optional[ProductStatusSchema] = None
 
 class ProductResponse(ProductBase):
+    # 注意: 一覧・検索・推薦で使うため image_urls（全画像）は含めない。
+    # 全画像を載せると 20件×最大5枚のbase64でレスポンスが肥大化し検索が遅くなる。
+    # サムネは image_url（先頭1枚）のみ。全画像が要る詳細は ProductWithSeller を使う。
     id: int
     seller_id: int
     status: ProductStatusSchema
@@ -76,6 +80,7 @@ class ProductResponse(ProductBase):
 
 class ProductWithSeller(ProductResponse):
     seller: UserResponse
+    image_urls: Optional[List[str]] = None  # 詳細ページ用の全画像
 
 # ==================== Purchase Schemas ====================
 

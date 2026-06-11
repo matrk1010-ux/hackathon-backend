@@ -8,6 +8,23 @@ from app.ml.resale import current_user_stage
 from app.resale_config import STAGE2_THRESHOLD
 from datetime import datetime
 
+MAX_IMAGES = 5  # 1商品あたりの画像上限（フロントと一致させる）
+
+
+def _normalize_images(image_urls, image_url):
+    """入力の画像をサニタイズして (先頭画像=サムネ, 全画像配列) を返す。
+    image_urls（配列）を優先し、無ければ単一 image_url を1枚として扱う。
+    空文字を除去し最大 MAX_IMAGES 枚に丸める。"""
+    imgs = []
+    if image_urls:
+        imgs = [u for u in image_urls if u]
+    elif image_url:
+        imgs = [image_url]
+    imgs = imgs[:MAX_IMAGES]
+    thumb = imgs[0] if imgs else None
+    return thumb, (imgs or None)
+
+
 def get_product_by_id(db: Session, product_id: int):
     """ID で商品を取得"""
     product = db.query(Product).filter(Product.id == product_id).first()
@@ -47,6 +64,7 @@ def create_product(db: Session, product: ProductCreate, seller_email: str):
             detail="転売の疑いにより現在新規出品が制限されています。",
         )
 
+    thumb, all_images = _normalize_images(product.image_urls, product.image_url)
     db_product = Product(
         seller_id=seller.id,
         title=product.title,
@@ -54,7 +72,8 @@ def create_product(db: Session, product: ProductCreate, seller_email: str):
         price=product.price,
         category=product.category,
         condition=product.condition,
-        image_url=product.image_url,
+        image_url=thumb,
+        image_urls=all_images,
         status=ProductStatus.available
     )
     
@@ -98,8 +117,16 @@ def update_product(db: Session, product_id: int, product_update: ProductUpdate, 
         db_product.category = product_update.category
     if product_update.condition is not None:
         db_product.condition = product_update.condition
-    if product_update.image_url is not None:
-        db_product.image_url = product_update.image_url
+    # 画像更新: image_urls（配列）が来たら全画像＋サムネを更新。
+    # 後方互換で単一 image_url のみ来た場合はそれを1枚として扱う。
+    if product_update.image_urls is not None:
+        thumb, all_images = _normalize_images(product_update.image_urls, None)
+        db_product.image_url = thumb
+        db_product.image_urls = all_images
+    elif product_update.image_url is not None:
+        thumb, all_images = _normalize_images(None, product_update.image_url)
+        db_product.image_url = thumb
+        db_product.image_urls = all_images
     if product_update.status is not None:
         db_product.status = product_update.status
     

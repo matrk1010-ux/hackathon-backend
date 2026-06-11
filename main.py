@@ -21,6 +21,7 @@ def run_migrations():
         "ALTER TABLE products ADD COLUMN embedding JSON",
         "ALTER TABLE products ADD COLUMN `condition` VARCHAR(50)",
         "ALTER TABLE products MODIFY image_url MEDIUMTEXT",
+        "ALTER TABLE products ADD COLUMN image_urls JSON",  # 複数画像（最大5枚）の data URI 配列
         # ===== 転売対策: users 累積スコア =====
         "ALTER TABLE users ADD COLUMN resale_score FLOAT NOT NULL DEFAULT 0",
         "ALTER TABLE users ADD COLUMN resale_score_updated_at DATETIME NULL",
