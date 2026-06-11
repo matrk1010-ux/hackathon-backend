@@ -4,7 +4,7 @@ from typing import List, Optional
 from app.database import get_db
 from app.models import User
 from app.schemas import ProductResponse
-from app.ml.recommender import recommend_by_category
+from app.ml.recommender import recommend_by_category, recommend_similar_products
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 
@@ -23,3 +23,13 @@ def get_recommendations(
 
     products = recommend_by_category(db, user.id, limit, category)
     return products
+
+
+@router.get("/similar/{product_id}", response_model=List[ProductResponse])
+def get_similar_products(
+    product_id: int,
+    limit: int = Query(4, ge=1, le=20),
+    db: Session = Depends(get_db),
+):
+    """商品詳細ページ用「この商品に似た商品」。embedding のコサイン類似度順。"""
+    return recommend_similar_products(db, product_id, limit)

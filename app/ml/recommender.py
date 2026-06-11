@@ -410,6 +410,90 @@ def _hybrid_rerank(
     return [by_id[i] for i in top_ids if i in by_id]
 
 
+# 似た商品（商品詳細ページ）の候補プール上限。
+# この商品の embedding と全候補のコサイン類似度を取るため、
+# 大きすぎると 3072 次元 embedding のロード＆計算が重くなる。
+SIMILAR_POOL = 200
+
+
+def recommend_similar_products(
+    db: Session, product_id: int, limit: int = 4
+) -> List[Product]:
+    """商品詳細ページ用の「この商品に似た商品」。
+    対象商品の embedding に対してコサイン類似度が高い順に返す。
+    embedding が無い／候補が組めない場合は同カテゴリ新着でフォールバックする。
+    出品中のみ・自分自身は除外。パーソナライズはしない（純粋なアイテム類似度）。"""
+    base = db.query(Product).filter(Product.id == product_id).first()
+    if not base:
+        return []
+
+    def _fallback() -> List[Product]:
+        # 同カテゴリの出品中・新着（自分を除く）でフォールバック
+        q = db.query(Product).filter(
+            Product.status == ProductStatus.available,
+            Product.hidden_by_penalty == False,  # noqa: E712
+            Product.id != product_id,
+        )
+        if base.category:
+            q = q.filter(Product.category == base.category)
+        return q.order_by(Product.created_at.desc()).limit(limit).all()
+
+    base_emb = base.embedding
+    if not base_emb:
+        return _fallback()
+
+    base_vec = np.array(base_emb, dtype=float)
+    base_norm = np.linalg.norm(base_vec)
+    if base_norm == 0:
+        return _fallback()
+    base_vec = base_vec / base_norm
+
+    # 候補プール：出品中で embedding を持つ商品（自分を除く）。
+    # 同カテゴリを優先し、足りなければ他カテゴリの新着で補う。
+    cand_ids: list[int] = []
+    seen: set[int] = {product_id}
+
+    def _collect(query, room: int):
+        for (pid,) in query.order_by(Product.created_at.desc()).limit(room).all():
+            if pid not in seen:
+                seen.add(pid)
+                cand_ids.append(pid)
+
+    base_q = db.query(Product.id).filter(
+        Product.status == ProductStatus.available,
+        Product.hidden_by_penalty == False,  # noqa: E712
+        Product.embedding.isnot(None),
+        Product.id != product_id,
+    )
+    if base.category:
+        _collect(base_q.filter(Product.category == base.category), SIMILAR_POOL)
+    if len(cand_ids) < SIMILAR_POOL:
+        _collect(base_q, SIMILAR_POOL - len(cand_ids))
+
+    if not cand_ids:
+        return _fallback()
+
+    # 候補の embedding を主キー一括取得（ソート無し）してコサイン類似度を計算
+    scored: list[tuple[float, int]] = []
+    for pid, pemb in (
+        db.query(Product.id, Product.embedding)
+        .filter(Product.id.in_(cand_ids))
+        .all()
+    ):
+        sim = _cosine(base_vec, pemb)
+        scored.append((sim, pid))
+
+    if not scored:
+        return _fallback()
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top_ids = [pid for _, pid in scored[:limit]]
+    objs = db.query(Product).filter(Product.id.in_(top_ids)).all()
+    by_id = {p.id: p for p in objs}
+    result = [by_id[i] for i in top_ids if i in by_id]
+    return result if result else _fallback()
+
+
 def _recommend_popular(
     db: Session, user_id: int, limit: int, exclude_ids: List[int]
 ) -> List[Product]:
