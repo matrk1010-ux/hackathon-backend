@@ -61,12 +61,13 @@ def _set_cached_rec(user_id: int, limit: int, products: list):
     _REC_CACHE[(user_id, limit)] = (time.time(), products)
 
 
-def _build_taste_vector(db: Session, user_id: int) -> Optional[np.ndarray]:
+def _build_taste_vector(db: Session, user_id: int, profile: dict = None) -> Optional[np.ndarray]:
     """ユーザーが見た/いいねした商品のembeddingを重み付き平均し、嗜好ベクトルを作る。
     embedding付きの行動が1つも無ければ None を返す。"""
     weighted_sum = None
     total_weight = 0.0
 
+    _t = time.perf_counter()
     # いいねした商品（強いシグナル）。直近 TASTE_LIKE_LIMIT 件のみ。
     liked_products = (
         db.query(Product.embedding)
@@ -85,7 +86,12 @@ def _build_taste_vector(db: Session, user_id: int) -> Optional[np.ndarray]:
         .limit(TASTE_VIEW_LIMIT)
         .all()
     )
+    if profile is not None:
+        profile["taste_query_s"] = round(time.perf_counter() - _t, 3)
+        profile["taste_liked_n"] = len(liked_products)
+        profile["taste_viewed_n"] = len(viewed_products)
 
+    _t = time.perf_counter()
     for (emb,), weight in (
         [(row, LIKE_WEIGHT) for row in liked_products]
         + [(row, VIEW_WEIGHT) for row in viewed_products]
@@ -95,6 +101,9 @@ def _build_taste_vector(db: Session, user_id: int) -> Optional[np.ndarray]:
         vec = np.array(emb, dtype=float)
         weighted_sum = vec * weight if weighted_sum is None else weighted_sum + vec * weight
         total_weight += weight
+
+    if profile is not None:
+        profile["taste_numpy_s"] = round(time.perf_counter() - _t, 3)
 
     if weighted_sum is None or total_weight == 0:
         return None
@@ -283,6 +292,7 @@ def _hybrid_rerank(
     user_cat_scores: dict,
     top_categories: List[str],
     taste_vec: np.ndarray,
+    profile: dict = None,
 ) -> List[Product]:
     """興味カテゴリの候補プールを、カテゴリ共起 × embedding類似度のハイブリッドで再ランクする"""
     # 候補とするカテゴリ＝共起で選ばれた全カテゴリ ＋ ユーザーが実際に触れたカテゴリ
@@ -294,6 +304,8 @@ def _hybrid_rerank(
     interest_categories.discard(None)
     if not interest_categories:
         return []
+
+    _t = time.perf_counter()
 
     # カテゴリごとに新着を取得してプールに入れる。
     # （全カテゴリ一括の新着順だと、大量投入されたカテゴリが新しさで枠を独占し、
@@ -315,6 +327,12 @@ def _hybrid_rerank(
                 candidates.append(p)
                 seen_ids.add(p.id)
 
+    if profile is not None:
+        profile["rerank_candidate_load_s"] = round(time.perf_counter() - _t, 3)
+        profile["candidate_n"] = len(candidates)
+        profile["per_cat"] = per_cat
+        profile["interest_cat_n"] = len(interest_categories)
+
     if not candidates:
         return []
 
@@ -322,6 +340,7 @@ def _hybrid_rerank(
     max_cat = max(recommend_cat_scores.values()) if recommend_cat_scores else 1.0
     max_cat = max_cat or 1.0
 
+    _t = time.perf_counter()
     scored = []
     for p in candidates:
         cat_component = recommend_cat_scores.get(p.category, 0.0) / max_cat
@@ -329,6 +348,8 @@ def _hybrid_rerank(
         emb_component = max(0.0, emb_component)  # 負の類似度は0に
         score = CAT_WEIGHT * cat_component + EMB_WEIGHT * emb_component
         scored.append((score, p))
+    if profile is not None:
+        profile["rerank_cosine_s"] = round(time.perf_counter() - _t, 3)
 
     scored.sort(key=lambda x: x[0], reverse=True)
     return [p for _, p in scored[:limit]]
@@ -346,3 +367,77 @@ def _recommend_popular(
     if exclude_ids:
         query = query.filter(Product.id.notin_(exclude_ids))
     return query.order_by(Product.created_at.desc()).limit(limit).all()
+
+
+# ==================== 一時的な計測（デバッグ用・後で撤去） ====================
+
+def profile_recommend(db: Session, user_id: int, limit: int = 20) -> dict:
+    """無カテゴリのパーソナライズ経路を各フェーズ計測しながら走らせ、秒数を返す。
+    キャッシュは使わず必ず本計算を行う。原因特定後に撤去する一時コード。"""
+    prof: dict = {}
+    c = time.perf_counter
+
+    t0 = c()
+    purchased_ids = [
+        r[0]
+        for r in db.query(Purchase.product_id)
+        .filter(Purchase.buyer_id == user_id)
+        .all()
+    ]
+    prof["purchased_query_s"] = round(c() - t0, 3)
+    prof["purchased_n"] = len(purchased_ids)
+
+    t0 = c()
+    viewed = (
+        db.query(Product.category, func.count(UserView.id).label("cnt"))
+        .join(UserView, UserView.product_id == Product.id)
+        .filter(UserView.user_id == user_id)
+        .group_by(Product.category)
+        .all()
+    )
+    liked = (
+        db.query(Product.category, func.count(Like.id).label("cnt"))
+        .join(Like, Like.product_id == Product.id)
+        .filter(Like.user_id == user_id)
+        .group_by(Product.category)
+        .all()
+    )
+    prof["cat_count_query_s"] = round(c() - t0, 3)
+
+    user_cat_scores: dict = {}
+    for cat, cnt in viewed:
+        if cat:
+            user_cat_scores[cat] = user_cat_scores.get(cat, 0) + cnt
+    for cat, cnt in liked:
+        if cat:
+            user_cat_scores[cat] = user_cat_scores.get(cat, 0) + cnt * 5
+
+    recommend_cat_scores: dict = {}
+    if CATEGORY_SIMILARITY:
+        for user_cat, user_score in user_cat_scores.items():
+            related = CATEGORY_SIMILARITY.get(user_cat, {})
+            for rec_cat, sim_score in related.items():
+                recommend_cat_scores[rec_cat] = (
+                    recommend_cat_scores.get(rec_cat, 0) + user_score * sim_score
+                )
+    else:
+        recommend_cat_scores = user_cat_scores
+    top_categories = sorted(
+        recommend_cat_scores, key=lambda c2: recommend_cat_scores[c2], reverse=True
+    )[:3]
+
+    t0 = c()
+    taste_vec = _build_taste_vector(db, user_id, profile=prof)
+    prof["taste_total_s"] = round(c() - t0, 3)
+
+    t0 = c()
+    reranked = []
+    if taste_vec is not None:
+        reranked = _hybrid_rerank(
+            db, user_id, limit, purchased_ids,
+            recommend_cat_scores, user_cat_scores, top_categories, taste_vec,
+            profile=prof,
+        )
+    prof["rerank_total_s"] = round(c() - t0, 3)
+    prof["result_n"] = len(reranked)
+    return prof
