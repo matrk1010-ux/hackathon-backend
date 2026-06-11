@@ -310,14 +310,17 @@ def _hybrid_rerank(
     # カテゴリごとに新着を取得してプールに入れる。
     # （全カテゴリ一括の新着順だと、大量投入されたカテゴリが新しさで枠を独占し、
     #   好きなカテゴリの商品がプールから漏れてしまうため。各カテゴリの代表性を確保する）
-    # 候補は再ランクに必要な id / category / embedding だけ取得する。
-    # Product全カラムを引くと image_url（Base64画像のMEDIUMTEXT）まで読み込み、
-    # 数百件で数十秒かかる。最終表示する分だけ後でProduct本体を取得する。
+    #
+    # 重要：embedding（3072次元のJSON）を ORDER BY created_at と同じクエリで引くと、
+    # (category,status,created_at) の複合インデックスが無いため MySQL が filesort し、
+    # その際に巨大な embedding を sort buffer に載せてカテゴリ全件をソートするので
+    # 数百件で数十秒かかる。そこで「並べ替え＋件数制限」は小さいカラム(id)だけで行い、
+    # embedding は確定した候補IDに対して主キー一括取得（ソート無し）で別途読む。
     per_cat = max(25, CANDIDATE_POOL // max(1, len(interest_categories)))
-    candidates = []  # (id, category, embedding)
-    seen_ids = set()
+    cand_cats: dict[int, str] = {}  # id -> category（候補の順序保持用）
+    cand_order: list[int] = []
     for cat in interest_categories:
-        q = db.query(Product.id, Product.category, Product.embedding).filter(
+        q = db.query(Product.id, Product.category).filter(
             Product.status == ProductStatus.available,
             Product.hidden_by_penalty == False,  # noqa: E712
             Product.seller_id != user_id,
@@ -325,10 +328,24 @@ def _hybrid_rerank(
         )
         if purchased_ids:
             q = q.filter(Product.id.notin_(purchased_ids))
-        for pid, pcat, pemb in q.order_by(Product.created_at.desc()).limit(per_cat).all():
-            if pid not in seen_ids:
-                candidates.append((pid, pcat, pemb))
-                seen_ids.add(pid)
+        for pid, pcat in q.order_by(Product.created_at.desc()).limit(per_cat).all():
+            if pid not in cand_cats:
+                cand_cats[pid] = pcat
+                cand_order.append(pid)
+
+    # 確定した候補IDの embedding を主キーで一括取得（ORDER BY 無し＝filesortしない）
+    emb_by_id: dict[int, list] = {}
+    if cand_order:
+        for pid, pemb in (
+            db.query(Product.id, Product.embedding)
+            .filter(Product.id.in_(cand_order))
+            .all()
+        ):
+            emb_by_id[pid] = pemb
+
+    candidates = [
+        (pid, cand_cats[pid], emb_by_id.get(pid)) for pid in cand_order
+    ]
 
     if profile is not None:
         profile["rerank_candidate_load_s"] = round(time.perf_counter() - _t, 3)
