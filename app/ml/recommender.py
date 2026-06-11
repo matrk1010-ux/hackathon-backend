@@ -310,11 +310,14 @@ def _hybrid_rerank(
     # カテゴリごとに新着を取得してプールに入れる。
     # （全カテゴリ一括の新着順だと、大量投入されたカテゴリが新しさで枠を独占し、
     #   好きなカテゴリの商品がプールから漏れてしまうため。各カテゴリの代表性を確保する）
+    # 候補は再ランクに必要な id / category / embedding だけ取得する。
+    # Product全カラムを引くと image_url（Base64画像のMEDIUMTEXT）まで読み込み、
+    # 数百件で数十秒かかる。最終表示する分だけ後でProduct本体を取得する。
     per_cat = max(25, CANDIDATE_POOL // max(1, len(interest_categories)))
-    candidates = []
+    candidates = []  # (id, category, embedding)
     seen_ids = set()
     for cat in interest_categories:
-        q = db.query(Product).filter(
+        q = db.query(Product.id, Product.category, Product.embedding).filter(
             Product.status == ProductStatus.available,
             Product.hidden_by_penalty == False,  # noqa: E712
             Product.seller_id != user_id,
@@ -322,10 +325,10 @@ def _hybrid_rerank(
         )
         if purchased_ids:
             q = q.filter(Product.id.notin_(purchased_ids))
-        for p in q.order_by(Product.created_at.desc()).limit(per_cat).all():
-            if p.id not in seen_ids:
-                candidates.append(p)
-                seen_ids.add(p.id)
+        for pid, pcat, pemb in q.order_by(Product.created_at.desc()).limit(per_cat).all():
+            if pid not in seen_ids:
+                candidates.append((pid, pcat, pemb))
+                seen_ids.add(pid)
 
     if profile is not None:
         profile["rerank_candidate_load_s"] = round(time.perf_counter() - _t, 3)
@@ -342,17 +345,22 @@ def _hybrid_rerank(
 
     _t = time.perf_counter()
     scored = []
-    for p in candidates:
-        cat_component = recommend_cat_scores.get(p.category, 0.0) / max_cat
-        emb_component = _cosine(taste_vec, p.embedding) if p.embedding else 0.0
+    for pid, pcat, pemb in candidates:
+        cat_component = recommend_cat_scores.get(pcat, 0.0) / max_cat
+        emb_component = _cosine(taste_vec, pemb) if pemb else 0.0
         emb_component = max(0.0, emb_component)  # 負の類似度は0に
         score = CAT_WEIGHT * cat_component + EMB_WEIGHT * emb_component
-        scored.append((score, p))
+        scored.append((score, pid))
     if profile is not None:
         profile["rerank_cosine_s"] = round(time.perf_counter() - _t, 3)
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [p for _, p in scored[:limit]]
+    top_ids = [pid for _, pid in scored[:limit]]
+
+    # 最終表示する上位だけ Product 本体を取得し、スコア順を保って返す
+    objs = db.query(Product).filter(Product.id.in_(top_ids)).all()
+    by_id = {p.id: p for p in objs}
+    return [by_id[i] for i in top_ids if i in by_id]
 
 
 def _recommend_popular(
