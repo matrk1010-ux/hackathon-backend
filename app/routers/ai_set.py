@@ -106,9 +106,9 @@ owned_overlap は上記ルールに従い必ず各プランに付けること（
 # 不足巻が候補から漏れないよう、やや多めに確保する。
 TOP_K = 20
 
-# Gemini の思考(thinking)予算。0=思考オフで応答を大幅に高速化する。
-# 提案品質に問題が出た場合は -1（モデルが必要に応じ自動で思考）に戻すだけでよい。
-AI_SET_THINKING_BUDGET = 0
+# Gemini の思考(thinking)予算。-1=モデルが必要に応じ自動で思考（精度優先）。
+# 0=思考オフで高速化できるが、提案精度が落ちたため自動思考に戻している。
+AI_SET_THINKING_BUDGET = -1
 
 
 class Message(BaseModel):
