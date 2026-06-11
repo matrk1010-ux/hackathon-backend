@@ -11,6 +11,7 @@ from app.routers.ai import router as ai_router
 from app.routers.recommendations import router as recommendations_router
 from app.routers.ai_set import router as ai_set_router
 from app.routers.resale import router as resale_router
+from app.routers.admin_temp import router as admin_temp_router  # 一時(デモ準備用) 実行後に削除
 from app.database import engine
 
 load_dotenv('.env.local')
@@ -88,6 +89,7 @@ app.include_router(ai_router)
 app.include_router(recommendations_router)
 app.include_router(ai_set_router)
 app.include_router(resale_router)
+app.include_router(admin_temp_router)  # 一時(デモ準備用) 実行後に削除
 
 
 @app.get("/")
