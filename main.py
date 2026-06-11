@@ -32,6 +32,10 @@ def run_migrations():
         "ALTER TABLE products ADD COLUMN hidden_by_penalty BOOLEAN NOT NULL DEFAULT FALSE",
         "CREATE INDEX idx_products_resale_flagged ON products (resale_flagged)",
         "CREATE INDEX idx_products_hidden_penalty ON products (hidden_by_penalty)",
+        # ===== 検索高速化: 商品タイトル＋説明文の全文検索インデックス（日本語ngram） =====
+        # LIKE '%kw%' は前方ワイルドカードで全件スキャンになり数千件で数秒かかる。
+        # ngram パーサのFULLTEXTで転置インデックス化し、2文字以上の検索をMATCH AGAINSTで高速化する。
+        "CREATE FULLTEXT INDEX ft_product_text ON products (title, description) WITH PARSER ngram",
         # ===== 転売対策: 判定の監査テーブル（create_all 不在のため明示作成） =====
         """CREATE TABLE IF NOT EXISTS resale_assessments (
             id INT AUTO_INCREMENT PRIMARY KEY,

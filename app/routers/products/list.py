@@ -1,6 +1,6 @@
 # 商品一覧取得ロジック（検索・フィルタ対応）
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import text
 from fastapi import HTTPException, status
 from app.models import Product, User, ProductStatus
 from typing import List, Optional
@@ -39,10 +39,23 @@ def list_products(
     
     # キーワードでフィルタ（タイトル・説明文の部分一致）
     if keyword:
-        like_pattern = f"%{keyword}%"
-        query = query.filter(
-            Product.title.like(like_pattern) | Product.description.like(like_pattern)
-        )
+        kw = keyword.strip()
+        if len(kw) >= 2:
+            # 2文字以上は ngram FULLTEXT インデックスで高速検索（全件スキャン回避）。
+            # BOOLEAN MODE では検索語をダブルクォートで囲みフレーズ検索にする。
+            # こうしないと ngram が語を2文字ずつに分解し各bigramがOR扱いになって
+            # 無関係な結果が大量に混じる。フレーズ検索なら「その語を丸ごと含む」=LIKE相当。
+            # 語中のダブルクォートは構文を壊すので除去する。
+            phrase = '"' + kw.replace('"', " ") + '"'
+            query = query.filter(
+                text("MATCH(products.title, products.description) AGAINST(:kw IN BOOLEAN MODE)")
+            ).params(kw=phrase)
+        else:
+            # 1文字は ngram(2文字単位) では引けないため従来の LIKE にフォールバック。
+            like_pattern = f"%{kw}%"
+            query = query.filter(
+                Product.title.like(like_pattern) | Product.description.like(like_pattern)
+            )
 
     # 価格範囲でフィルタ
     if min_price is not None:
