@@ -21,9 +21,10 @@ def _load_similarity() -> dict:
 # 起動時に1回だけ読み込む
 CATEGORY_SIMILARITY = _load_similarity()
 
-# ハイブリッドスコアの重み（カテゴリ共起 と embedding類似度 の配合）
-CAT_WEIGHT = 0.4   # α: カテゴリ共起スコア（多様性・文脈）
-EMB_WEIGHT = 0.6   # β: embedding類似度（アイテム単位の好み）
+# ハイブリッドスコアの重み（カテゴリ共起 × embedding類似度 × 価格帯近接）。合計1.0。
+CAT_WEIGHT = 0.35   # α: カテゴリ共起スコア（多様性・文脈）
+EMB_WEIGHT = 0.50   # β: embedding類似度（アイテム単位の好み）
+PRICE_WEIGHT = 0.15  # γ: ユーザーがよく見る価格帯への近さ
 
 # 行動シグナルの重み（嗜好ベクトル作成時）
 VIEW_WEIGHT = 1.0
@@ -102,6 +103,47 @@ def _build_taste_vector(db: Session, user_id: int) -> Optional[np.ndarray]:
     avg = weighted_sum / total_weight
     norm = np.linalg.norm(avg)
     return avg / norm if norm > 0 else None
+
+
+def _build_taste_price(db: Session, user_id: int) -> Optional[float]:
+    """嗜好の中心価格＝閲覧/いいねした商品の重み付き平均価格（直近のみ）。
+    価格付きの行動が無ければ None を返す。"""
+    liked = (
+        db.query(Product.price)
+        .join(Like, Like.product_id == Product.id)
+        .filter(Like.user_id == user_id)
+        .order_by(Like.liked_at.desc())
+        .limit(TASTE_LIKE_LIMIT)
+        .all()
+    )
+    viewed = (
+        db.query(Product.price)
+        .join(UserView, UserView.product_id == Product.id)
+        .filter(UserView.user_id == user_id)
+        .order_by(UserView.viewed_at.desc())
+        .limit(TASTE_VIEW_LIMIT)
+        .all()
+    )
+    num = 0.0
+    den = 0.0
+    for (price,), weight in (
+        [(row, LIKE_WEIGHT) for row in liked]
+        + [(row, VIEW_WEIGHT) for row in viewed]
+    ):
+        if not price or price <= 0:
+            continue
+        num += float(price) * weight
+        den += weight
+    return (num / den) if den > 0 else None
+
+
+def _price_proximity(price: Optional[int], taste_price: Optional[float]) -> float:
+    """価格帯の近さを [0,1] で返す。嗜好価格と同じ＝1.0、約3倍/3分の1で0。
+    価格比の対数で測るため、安い帯でも高い帯でも対称に効く。"""
+    if not price or not taste_price or price <= 0 or taste_price <= 0:
+        return 0.0
+    ratio = abs(np.log(float(price) / taste_price)) / np.log(3.0)
+    return float(max(0.0, 1.0 - min(1.0, ratio)))
 
 
 def _cosine(vec: np.ndarray, emb: list) -> float:
@@ -212,9 +254,10 @@ def _recommend_personalized(
     # --- A+B: 嗜好ベクトルがあれば embedding × カテゴリ共起 のハイブリッドで再ランク ---
     taste_vec = _build_taste_vector(db, user_id)
     if taste_vec is not None:
+        taste_price = _build_taste_price(db, user_id)
         reranked = _hybrid_rerank(
             db, user_id, limit, purchased_ids,
-            recommend_cat_scores, user_cat_scores, top_categories, taste_vec,
+            recommend_cat_scores, user_cat_scores, top_categories, taste_vec, taste_price,
         )
         if reranked:
             return reranked
@@ -283,8 +326,9 @@ def _hybrid_rerank(
     user_cat_scores: dict,
     top_categories: List[str],
     taste_vec: np.ndarray,
+    taste_price: Optional[float] = None,
 ) -> List[Product]:
-    """興味カテゴリの候補プールを、カテゴリ共起 × embedding類似度のハイブリッドで再ランクする"""
+    """興味カテゴリの候補プールを、カテゴリ共起 × embedding類似度 × 価格帯近接で再ランクする"""
     # 候補とするカテゴリ＝共起で選ばれた全カテゴリ ＋ ユーザーが実際に触れたカテゴリ
     interest_categories = (
         set(recommend_cat_scores.keys())
@@ -306,9 +350,10 @@ def _hybrid_rerank(
     # embedding は確定した候補IDに対して主キー一括取得（ソート無し）で別途読む。
     per_cat = max(25, CANDIDATE_POOL // max(1, len(interest_categories)))
     cand_cats: dict[int, str] = {}  # id -> category（候補の順序保持用）
+    cand_price: dict[int, int] = {}  # id -> price（価格帯近接の計算用）
     cand_order: list[int] = []
     for cat in interest_categories:
-        q = db.query(Product.id, Product.category).filter(
+        q = db.query(Product.id, Product.category, Product.price).filter(
             Product.status == ProductStatus.available,
             Product.hidden_by_penalty == False,  # noqa: E712
             Product.seller_id != user_id,
@@ -316,9 +361,10 @@ def _hybrid_rerank(
         )
         if purchased_ids:
             q = q.filter(Product.id.notin_(purchased_ids))
-        for pid, pcat in q.order_by(Product.created_at.desc()).limit(per_cat).all():
+        for pid, pcat, pprice in q.order_by(Product.created_at.desc()).limit(per_cat).all():
             if pid not in cand_cats:
                 cand_cats[pid] = pcat
+                cand_price[pid] = pprice
                 cand_order.append(pid)
 
     # 確定した候補IDの embedding を主キーで一括取得（ORDER BY 無し＝filesortしない）
@@ -347,7 +393,12 @@ def _hybrid_rerank(
         cat_component = recommend_cat_scores.get(pcat, 0.0) / max_cat
         emb_component = _cosine(taste_vec, pemb) if pemb else 0.0
         emb_component = max(0.0, emb_component)  # 負の類似度は0に
-        score = CAT_WEIGHT * cat_component + EMB_WEIGHT * emb_component
+        price_component = _price_proximity(cand_price.get(pid), taste_price)
+        score = (
+            CAT_WEIGHT * cat_component
+            + EMB_WEIGHT * emb_component
+            + PRICE_WEIGHT * price_component
+        )
         scored.append((score, pid))
 
     scored.sort(key=lambda x: x[0], reverse=True)
