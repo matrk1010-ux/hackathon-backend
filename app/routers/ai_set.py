@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import numpy as np
-import google.generativeai as genai
+from google import genai as genai_v2
+from google.genai import types as genai_types
 
 from app.database import get_db
 from app.models import Product, ProductStatus
@@ -104,6 +105,10 @@ owned_overlap は上記ルールに従い必ず各プランに付けること（
 # RAGで候補としてGeminiに渡す件数。シリーズ物（同一作品の多数の巻）でも
 # 不足巻が候補から漏れないよう、やや多めに確保する。
 TOP_K = 20
+
+# Gemini の思考(thinking)予算。0=思考オフで応答を大幅に高速化する。
+# 提案品質に問題が出た場合は -1（モデルが必要に応じ自動で思考）に戻すだけでよい。
+AI_SET_THINKING_BUDGET = 0
 
 
 class Message(BaseModel):
@@ -218,7 +223,6 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="GEMINI_API_KEY not configured")
-    genai.configure(api_key=api_key)
 
     user_message = next((m.content for m in reversed(request.messages) if m.role == "user"), "")
     if not user_message:
@@ -283,15 +287,26 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
         hi = f"¥{request.max_budget:,}" if request.max_budget is not None else "上限なし"
         product_context += f"\n【予算】{lo} 〜 {hi}\n"
 
-    # Step 4: Geminiにセット提案を依頼
-    model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=SYSTEM_PROMPT)
-    history = [
-        {"role": m.role, "parts": [m.content]}
+    # Step 4: Geminiにセット提案を依頼（google-genai SDKで thinking を制御し高速化）
+    client = genai_v2.Client(api_key=api_key)
+    contents = [
+        genai_types.Content(role=m.role, parts=[genai_types.Part(text=m.content)])
         for m in request.messages[:-1]
     ]
-    chat = model.start_chat(history=history)
-    response = chat.send_message(user_message + product_context)
-    raw_text = response.text.strip()
+    contents.append(
+        genai_types.Content(
+            role="user", parts=[genai_types.Part(text=user_message + product_context)]
+        )
+    )
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=contents,
+        config=genai_types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            thinking_config=genai_types.ThinkingConfig(thinking_budget=AI_SET_THINKING_BUDGET),
+        ),
+    )
+    raw_text = (response.text or "").strip()
 
     # Step 5: Geminiが提案した「買い方プラン」を抽出する
     plans_raw = []
