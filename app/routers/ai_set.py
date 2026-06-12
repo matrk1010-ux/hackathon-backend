@@ -2,7 +2,6 @@ import os
 import re
 import json
 import time
-from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -113,8 +112,6 @@ class Message(BaseModel):
 
 class AiSetChatRequest(BaseModel):
     messages: list[Message]
-    min_budget: Optional[int] = None
-    max_budget: Optional[int] = None
 
 
 class AiSetPlan(BaseModel):
@@ -192,24 +189,12 @@ def annotate_and_sort_plans(plans: list["AiSetPlan"]) -> list["AiSetPlan"]:
     return sorted_plans
 
 
-def in_budget(price: int, min_budget: Optional[int], max_budget: Optional[int]) -> bool:
-    if min_budget is not None and price < min_budget:
-        return False
-    if max_budget is not None and price > max_budget:
-        return False
-    return True
-
-
-def get_all_available(db: Session, min_budget: Optional[int], max_budget: Optional[int]) -> list:
+def get_all_available(db: Session) -> list:
     """embeddingがない場合のフォールバック：全商品をGeminiに渡す"""
     q = db.query(Product).filter(
         Product.status == ProductStatus.available,
         Product.hidden_by_penalty == False,  # noqa: E712
     )
-    if min_budget is not None:
-        q = q.filter(Product.price >= min_budget)
-    if max_budget is not None:
-        q = q.filter(Product.price <= max_budget)
     return q.limit(50).all()
 
 
@@ -237,8 +222,8 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
                 q = q / qn
             # 正規化済み行列との内積＝コサイン類似度を一括計算
             scores = matrix @ q
-            # 予算で絞られる分を見込み、TOP_K より多めに上位を取り出す
-            k = min(len(ids), TOP_K * 4)
+            # 在庫変化で落ちる分を見込み、TOP_K より多めに上位を取り出す
+            k = min(len(ids), TOP_K * 2)
             top_idx = np.argpartition(-scores, k - 1)[:k]
             top_idx = top_idx[np.argsort(-scores[top_idx])]
             top_ids = [ids[i] for i in top_idx]
@@ -256,14 +241,14 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
             }
             for pid in top_ids:
                 p = prod_map.get(pid)
-                if p and in_budget(p.price, request.min_budget, request.max_budget):
+                if p:
                     candidates.append(p)
                     if len(candidates) >= TOP_K:
                         break
 
     # Step 2: embeddingがある商品が0件なら全商品を候補として渡す
     if not candidates:
-        candidates = get_all_available(db, request.min_budget, request.max_budget)
+        candidates = get_all_available(db)
 
     # Step 3: Geminiに渡す候補リストを構築
     if candidates:
@@ -277,11 +262,6 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
             product_context += "\n"
     else:
         product_context = "\n\n【候補商品】\n現在出品されている商品がありません。\n"
-
-    if request.min_budget is not None or request.max_budget is not None:
-        lo = f"¥{request.min_budget:,}" if request.min_budget is not None else "下限なし"
-        hi = f"¥{request.max_budget:,}" if request.max_budget is not None else "上限なし"
-        product_context += f"\n【予算】{lo} 〜 {hi}\n"
 
     # Step 4: Geminiにセット提案を依頼
     model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=SYSTEM_PROMPT)
