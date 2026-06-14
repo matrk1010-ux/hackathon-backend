@@ -43,6 +43,16 @@ class UserResponse(UserBase):
 class UserWithProducts(UserResponse):
     products: List['ProductResponse'] = []
 
+class SellerProfileResponse(BaseModel):
+    """出品者プロフィールページ用。出品数・売却数・転売段階を含む。"""
+    id: int
+    username: str
+    email: EmailStr
+    created_at: datetime
+    active_count: int = 0   # 出品中（公開）の商品数
+    sold_count: int = 0     # 売却済みの商品数
+    resale_stage: int = 0   # 0=通常 1=警告 2=制限（買い手への注意表示に使う）
+
 # ==================== Product Schemas ====================
 
 class ProductBase(BaseModel):
@@ -77,6 +87,7 @@ class ProductResponse(ProductBase):
     updated_at: datetime
     resale_flagged: bool = False       # 段階1: 買い手向け「転売の可能性」バッジ
     hidden_by_penalty: bool = False    # 段階2: 公開導線から非表示（本人マイページ用）
+    like_count: int = 0                # いいね総数（一覧で付与。未集計の経路では0）
 
     class Config:
         from_attributes = True
@@ -84,6 +95,7 @@ class ProductResponse(ProductBase):
 class ProductWithSeller(ProductResponse):
     seller: UserResponse
     image_urls: Optional[List[str]] = None  # 詳細ページ用の全画像
+    view_count: int = 0                # 閲覧総数（詳細でのみ付与）
 
 # ==================== Purchase Schemas ====================
 
@@ -132,6 +144,22 @@ class LikeResponse(BaseModel):
     product_id: int
     liked_at: datetime
     
+    class Config:
+        from_attributes = True
+
+# ==================== Comment Schemas ====================
+
+class CommentCreate(BaseModel):
+    body: str
+
+class CommentResponse(BaseModel):
+    id: int
+    product_id: int
+    user_id: int
+    username: str       # 表示名（join で付与）
+    body: str
+    created_at: datetime
+
     class Config:
         from_attributes = True
 

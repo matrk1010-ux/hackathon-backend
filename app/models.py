@@ -167,3 +167,21 @@ class ResaleAssessment(Base):
         Index('idx_resale_user_created', 'user_id', 'created_at'),
     )
 
+
+class Comment(Base):
+    """商品への質問・コメント（購入前のQ&A）。"""
+    __tablename__ = "comments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    body = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    user = relationship("User")
+    product = relationship("Product")
+
+    __table_args__ = (
+        Index('idx_comments_product_created', 'product_id', 'created_at'),
+    )
+

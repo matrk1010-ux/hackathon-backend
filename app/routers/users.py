@@ -1,9 +1,11 @@
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from app.database import get_db
-from app.models import User
-from app.schemas import UserCreate, UserResponse, UserUpdate
+from app.models import User, Product, ProductStatus
+from app.schemas import UserCreate, UserResponse, UserUpdate, SellerProfileResponse
+from app.ml.resale import current_user_stage
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -73,6 +75,40 @@ def update_me(email: str, user_update: UserUpdate, db: Session = Depends(get_db)
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.get("/seller-profile/{email}", response_model=SellerProfileResponse)
+def get_seller_profile(email: str, db: Session = Depends(get_db)):
+    """出品者プロフィール（出品者ページのヘッダー用）。出品数・売却数・転売段階を返す。"""
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    active_count = (
+        db.query(func.count(Product.id))
+        .filter(
+            Product.seller_id == user.id,
+            Product.status == ProductStatus.available,
+            Product.hidden_by_penalty == False,  # noqa: E712
+        )
+        .scalar()
+        or 0
+    )
+    sold_count = (
+        db.query(func.count(Product.id))
+        .filter(Product.seller_id == user.id, Product.status == ProductStatus.sold)
+        .scalar()
+        or 0
+    )
+    return SellerProfileResponse(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        created_at=user.created_at,
+        active_count=active_count,
+        sold_count=sold_count,
+        resale_stage=current_user_stage(user),
+    )
 
 
 @router.get("/{user_id}", response_model=UserResponse)

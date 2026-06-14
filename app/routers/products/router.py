@@ -1,11 +1,20 @@
 # エンドポイント定義
 from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List, Optional
 from app.database import get_db
-from app.schemas import ProductCreate, ProductUpdate, ProductResponse, ProductWithSeller
+from app.models import Like, UserView
+from app.schemas import (
+    ProductCreate,
+    ProductUpdate,
+    ProductResponse,
+    ProductWithSeller,
+    CommentCreate,
+    CommentResponse,
+)
 from app.ml.resale import assess_product_in_background
-from . import crud, list as product_list, interactions
+from . import crud, list as product_list, interactions, comments
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -33,12 +42,15 @@ def list_products_endpoint(
     min_price: Optional[int] = None,
     max_price: Optional[int] = None,
     keyword: Optional[str] = None,
+    condition: Optional[str] = None,
+    sort: Optional[str] = Query(None, description="newest(既定)/price_asc/price_desc/likes"),
     db: Session = Depends(get_db)
 ):
-    """商品一覧を取得"""
-    return product_list.list_products(
-        db, skip, limit, category, status, min_price, max_price, keyword
+    """商品一覧を取得（検索・フィルタ・並び替え）"""
+    products = product_list.list_products(
+        db, skip, limit, category, status, min_price, max_price, keyword, condition, sort
     )
+    return interactions.attach_like_counts(db, products)
 
 @router.get("/{product_id}", response_model=ProductWithSeller)
 def get_product_detail(
@@ -47,7 +59,15 @@ def get_product_detail(
     db: Session = Depends(get_db)
 ):
     """商品詳細を取得。段階2で非表示の商品は所有者本人以外には 404 を返す。"""
-    return crud.get_product_for_viewer(db, product_id, user_email)
+    product = crud.get_product_for_viewer(db, product_id, user_email)
+    # 詳細では いいね数・閲覧数 を付与（社会的証明の表示用）
+    product.like_count = (
+        db.query(func.count(Like.id)).filter(Like.product_id == product.id).scalar() or 0
+    )
+    product.view_count = (
+        db.query(func.count(UserView.id)).filter(UserView.product_id == product.id).scalar() or 0
+    )
+    return product
 
 @router.put("/{product_id}", response_model=ProductResponse)
 def update_product(
@@ -75,10 +95,12 @@ def get_seller_products(
     seller_email: str,
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
+    public_only: bool = Query(False, description="公開導線では取り下げ・非表示商品を除外"),
     db: Session = Depends(get_db)
 ):
     """出品者の商品を取得"""
-    return product_list.get_seller_products(db, seller_email, skip, limit)
+    products = product_list.get_seller_products(db, seller_email, skip, limit, public_only)
+    return interactions.attach_like_counts(db, products)
 
 # ==================== Interactions ====================
 
@@ -90,7 +112,35 @@ def get_liked_products(
     db: Session = Depends(get_db)
 ):
     """ユーザーがいいねした商品一覧を取得"""
-    return interactions.get_liked_products(db, user_email, skip, limit)
+    products = interactions.get_liked_products(db, user_email, skip, limit)
+    return interactions.attach_like_counts(db, products)
+
+# ==================== Comments（購入前Q&A） ====================
+
+@router.get("/{product_id}/comments", response_model=List[CommentResponse])
+def list_product_comments(product_id: int, db: Session = Depends(get_db)):
+    """商品のコメント一覧（古い順）"""
+    return comments.list_comments(db, product_id)
+
+@router.post("/{product_id}/comments", response_model=CommentResponse, status_code=201)
+def create_product_comment(
+    product_id: int,
+    payload: CommentCreate,
+    user_email: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    """商品にコメントを投稿"""
+    return comments.create_comment(db, product_id, user_email, payload.body)
+
+@router.delete("/comments/{comment_id}")
+def delete_product_comment(
+    comment_id: int,
+    user_email: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    """自分のコメントを削除"""
+    return comments.delete_comment(db, comment_id, user_email)
+
 
 @router.post("/{product_id}/view")
 def record_product_view(

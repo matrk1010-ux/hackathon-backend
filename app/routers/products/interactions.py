@@ -1,8 +1,29 @@
 # ユーザー行動（閲覧・いいね）を記録するロジック
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 from app.models import Product, User, UserView, Like
+
+
+def attach_like_counts(db: Session, products: list):
+    """商品リストに like_count を一括付与する（N+1を避ける単一集計）。
+
+    ORM インスタンスへ一時属性として設定し、ProductResponse(from_attributes) が読む。
+    """
+    if not products:
+        return products
+    ids = [p.id for p in products]
+    rows = (
+        db.query(Like.product_id, func.count(Like.id))
+        .filter(Like.product_id.in_(ids))
+        .group_by(Like.product_id)
+        .all()
+    )
+    counts = {pid: c for pid, c in rows}
+    for p in products:
+        p.like_count = counts.get(p.id, 0)
+    return products
+
 
 def get_liked_products(db: Session, user_email: str, skip: int = 0, limit: int = 100):
     """ユーザーがいいねした商品一覧を取得（新しい順）"""

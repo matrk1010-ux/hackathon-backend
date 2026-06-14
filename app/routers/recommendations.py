@@ -5,6 +5,7 @@ from app.database import get_db
 from app.models import User
 from app.schemas import ProductResponse
 from app.ml.recommender import recommend_by_category, recommend_similar_products
+from app.routers.products.interactions import attach_like_counts
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 
@@ -22,7 +23,7 @@ def get_recommendations(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     products = recommend_by_category(db, user.id, limit, category)
-    return products
+    return attach_like_counts(db, products)
 
 
 @router.get("/similar/{product_id}", response_model=List[ProductResponse])
@@ -32,4 +33,5 @@ def get_similar_products(
     db: Session = Depends(get_db),
 ):
     """商品詳細ページ用「この商品に似た商品」。embedding のコサイン類似度順。"""
-    return recommend_similar_products(db, product_id, limit)
+    products = recommend_similar_products(db, product_id, limit)
+    return attach_like_counts(db, products)

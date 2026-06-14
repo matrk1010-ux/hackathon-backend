@@ -54,6 +54,15 @@ def run_migrations():
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             INDEX idx_resale_user_created (user_id, created_at)
         )""",
+        # ===== 商品コメント（購入前Q&A）。create_all 不在のため明示作成 =====
+        """CREATE TABLE IF NOT EXISTS comments (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            product_id INT NOT NULL,
+            user_id INT NOT NULL,
+            body TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_comments_product_created (product_id, created_at)
+        )""",
     ]
     for sql in migrations:
         with engine.connect() as conn:
