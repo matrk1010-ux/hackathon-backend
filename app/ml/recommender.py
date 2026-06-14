@@ -2,7 +2,7 @@ import json
 import os
 import time
 import numpy as np
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 from sqlalchemy import func
 from typing import List, Optional
 from app.models import Product, UserView, Like, Purchase, ProductStatus
@@ -177,7 +177,7 @@ def recommend_by_category(
 
     # カテゴリ指定時は、そのカテゴリ内の出品から（自分・購入済みを除く）新着順で返す
     if category:
-        cat_query = db.query(Product).filter(
+        cat_query = db.query(Product).options(defer(Product.embedding)).filter(
             Product.status == ProductStatus.available,
             Product.hidden_by_penalty == False,  # noqa: E712
             Product.seller_id != user_id,
@@ -276,7 +276,7 @@ def _recommend_personalized(
         quota = max(1, round(limit * recommend_cat_scores[cat] / total_score))
         quota = min(quota, limit - len(products))
 
-        cat_query = db.query(Product).filter(
+        cat_query = db.query(Product).options(defer(Product.embedding)).filter(
             Product.status == ProductStatus.available,
             Product.hidden_by_penalty == False,  # noqa: E712
             Product.seller_id != user_id,
@@ -298,7 +298,7 @@ def _recommend_personalized(
         # 実際に見た/いいねしたカテゴリ ＋ 共起で選ばれた上位カテゴリ
         interest_categories = list(set(top_categories) | set(user_cat_scores.keys()))
 
-        supp_query = db.query(Product).filter(
+        supp_query = db.query(Product).options(defer(Product.embedding)).filter(
             Product.status == ProductStatus.available,
             Product.hidden_by_penalty == False,  # noqa: E712
             Product.seller_id != user_id,
@@ -405,7 +405,8 @@ def _hybrid_rerank(
     top_ids = [pid for _, pid in scored[:limit]]
 
     # 最終表示する上位だけ Product 本体を取得し、スコア順を保って返す
-    objs = db.query(Product).filter(Product.id.in_(top_ids)).all()
+    # （embedding はスコア計算済みで応答に不要なので defer）
+    objs = db.query(Product).options(defer(Product.embedding)).filter(Product.id.in_(top_ids)).all()
     by_id = {p.id: p for p in objs}
     return [by_id[i] for i in top_ids if i in by_id]
 
@@ -429,7 +430,7 @@ def recommend_similar_products(
 
     def _fallback() -> List[Product]:
         # 同カテゴリの出品中・新着（自分を除く）でフォールバック
-        q = db.query(Product).filter(
+        q = db.query(Product).options(defer(Product.embedding)).filter(
             Product.status == ProductStatus.available,
             Product.hidden_by_penalty == False,  # noqa: E712
             Product.id != product_id,
@@ -488,7 +489,7 @@ def recommend_similar_products(
 
     scored.sort(key=lambda x: x[0], reverse=True)
     top_ids = [pid for _, pid in scored[:limit]]
-    objs = db.query(Product).filter(Product.id.in_(top_ids)).all()
+    objs = db.query(Product).options(defer(Product.embedding)).filter(Product.id.in_(top_ids)).all()
     by_id = {p.id: p for p in objs}
     result = [by_id[i] for i in top_ids if i in by_id]
     return result if result else _fallback()
@@ -498,7 +499,7 @@ def _recommend_popular(
     db: Session, user_id: int, limit: int, exclude_ids: List[int]
 ) -> List[Product]:
     """新着商品を返すフォールバック"""
-    query = db.query(Product).filter(
+    query = db.query(Product).options(defer(Product.embedding)).filter(
         Product.status == ProductStatus.available,
         Product.hidden_by_penalty == False,  # noqa: E712
         Product.seller_id != user_id,

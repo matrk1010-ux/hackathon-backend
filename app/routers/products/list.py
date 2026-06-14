@@ -1,5 +1,5 @@
 # 商品一覧取得ロジック（検索・フィルタ対応）
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 from sqlalchemy import text, func
 from fastapi import HTTPException, status
 from app.models import Product, User, ProductStatus, Like
@@ -18,8 +18,10 @@ def list_products(
     sort: Optional[str] = None,
 ) -> List[Product]:
     """商品一覧を取得（検索・フィルタ・並び替え対応）"""
-    # 転売対策・段階2: 公開導線では出品制限中ユーザーの商品を除外
-    query = db.query(Product).filter(
+    # 転売対策・段階2: 公開導線では出品制限中ユーザーの商品を除外。
+    # embedding（1件3072次元のJSON）は一覧では使わないので defer で読み込まない
+    # （AIセット用に後埋め後、全カラム読みで一覧が激重になっていた）。
+    query = db.query(Product).options(defer(Product.embedding)).filter(
         Product.status == ProductStatus.available,
         Product.hidden_by_penalty == False,  # noqa: E712
     )
@@ -112,7 +114,7 @@ def get_seller_products(
             detail="User not found"
         )
 
-    q = db.query(Product).filter(Product.seller_id == seller.id)
+    q = db.query(Product).options(defer(Product.embedding)).filter(Product.seller_id == seller.id)
     if public_only:
         q = q.filter(
             Product.status != ProductStatus.removed,
