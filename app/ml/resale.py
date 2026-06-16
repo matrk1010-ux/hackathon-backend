@@ -209,14 +209,15 @@ def compute_listing_score(db: Session, product: Product, now: Optional[datetime]
 
     breakdown["gate_passed"] = True
 
-    # 補助①: 同一商品の大量出品
+    # 補助①: 同一商品の大量出品（5個から加点・10個で満点に厳格化）
     dup_count = count_duplicate_listings(db, product)
     dup_score = _linear_score(dup_count, cfg.DUP_MIN_COUNT, cfg.DUP_FULL_COUNT, cfg.DUP_MAX_SCORE)
     breakdown["dup_count"] = dup_count
 
-    # 補助②: 新品出品サイクル
+    # 補助②: 新品出品サイクル。断捨離での一括出品を誤検知しないよう単独では加点せず、
+    #         ①③の根拠を裏付ける増幅係数(0〜1)として使う。
     recent_count = count_recent_new_listings(db, product, now)
-    cycle_score = _linear_score(recent_count, cfg.CYCLE_MIN_COUNT, cfg.CYCLE_FULL_COUNT, cfg.CYCLE_MAX_SCORE)
+    cycle_factor = _linear_score(recent_count, cfg.CYCLE_MIN_COUNT, cfg.CYCLE_FULL_COUNT, 1.0)
     breakdown["recent_count"] = recent_count
 
     # 補助③: 定価超え × 確信度
@@ -230,7 +231,16 @@ def compute_listing_score(db: Session, product: Product, now: Optional[datetime]
     breakdown["list_price"] = list_price
     breakdown["price_confidence"] = confidence
 
-    score = cfg.BASE_SCORE + dup_score + cycle_score + price_score
+    # 核となる転売の根拠 = 同一商品の大量出品(①) ＋ 定価超え(③)。
+    # どちらも無ければ、新品を多数・高頻度に出していても通常の出品として加点しない
+    # （断捨離で一気に出す一般ユーザーを段階制裁から守る）。
+    # ②(出品サイクル)は core がある時だけ、その疑いを増幅する裏付けとして効かせる。
+    core = dup_score + price_score
+    if core <= 0:
+        score = 0.0
+    else:
+        score = cfg.BASE_SCORE + core * (1.0 + cfg.CYCLE_BOOST * cycle_factor)
+
     breakdown["score"] = round(max(0.0, min(100.0, score)), 2)
     return breakdown
 
