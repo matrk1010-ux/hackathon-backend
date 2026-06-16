@@ -235,11 +235,9 @@ def compute_listing_score(db: Session, product: Product, now: Optional[datetime]
     # どちらも無ければ、新品を多数・高頻度に出していても通常の出品として加点しない
     # （断捨離で一気に出す一般ユーザーを段階制裁から守る）。
     # ②(出品サイクル)は core がある時だけ、その疑いを増幅する裏付けとして効かせる。
+    # 基礎点は撤廃。スコアを根拠(core)の量に比例させる（1出品の上限 = 60×1.5 = 90）。
     core = dup_score + price_score
-    if core <= 0:
-        score = 0.0
-    else:
-        score = cfg.BASE_SCORE + core * (1.0 + cfg.CYCLE_BOOST * cycle_factor)
+    score = core * (1.0 + cfg.CYCLE_BOOST * cycle_factor)
 
     breakdown["score"] = round(max(0.0, min(100.0, score)), 2)
     return breakdown
