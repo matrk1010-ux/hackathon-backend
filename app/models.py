@@ -35,6 +35,11 @@ class User(Base):
     resale_stage = Column(Integer, default=0, nullable=False)  # 0=通常 1=警告 2=制限
     resale_flagged_at = Column(DateTime, nullable=True)        # 段階1で本人に通知した時刻
 
+    # プロフィール
+    avatar_url = Column(Text(length=16777215), nullable=True)  # base64 data URI（プロフィール画像）
+    bio = Column(Text, nullable=True)                          # 自己紹介文
+    notifications_read_at = Column(DateTime, nullable=True)    # 通知を最後に開いた時刻（既読管理）
+
     # リレーション
     products = relationship("Product", back_populates="seller", foreign_keys="Product.seller_id")
     purchases = relationship("Purchase", back_populates="buyer")

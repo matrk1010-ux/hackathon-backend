@@ -31,12 +31,16 @@ class UserLogin(BaseModel):
 
 class UserUpdate(BaseModel):
     username: Optional[str] = None  # 取引時の表示名。本人がマイページで変更できる
+    avatar_url: Optional[str] = None  # プロフィール画像（base64 data URI）
+    bio: Optional[str] = None         # 自己紹介文
 
 class UserResponse(UserBase):
     id: int
     created_at: datetime
     updated_at: datetime
-    
+    avatar_url: Optional[str] = None
+    bio: Optional[str] = None
+
     class Config:
         from_attributes = True
 
@@ -52,6 +56,8 @@ class SellerProfileResponse(BaseModel):
     active_count: int = 0   # 出品中（公開）の商品数
     sold_count: int = 0     # 売却済みの商品数
     resale_stage: int = 0   # 0=通常 1=警告 2=制限（買い手への注意表示に使う）
+    avatar_url: Optional[str] = None  # プロフィール画像
+    bio: Optional[str] = None         # 自己紹介文
 
 # ==================== Product Schemas ====================
 

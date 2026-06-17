@@ -71,6 +71,12 @@ def update_me(email: str, user_update: UserUpdate, db: Session = Depends(get_db)
             )
         user.username = new_name
 
+    if user_update.avatar_url is not None:
+        # 空文字なら画像クリア
+        user.avatar_url = user_update.avatar_url or None
+    if user_update.bio is not None:
+        user.bio = (user_update.bio.strip()[:300]) or None
+
     user.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(user)
@@ -108,6 +114,8 @@ def get_seller_profile(email: str, db: Session = Depends(get_db)):
         active_count=active_count,
         sold_count=sold_count,
         resale_stage=current_user_stage(user),
+        avatar_url=user.avatar_url,
+        bio=user.bio,
     )
 
 

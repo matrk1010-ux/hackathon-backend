@@ -11,6 +11,7 @@ from app.routers.ai import router as ai_router
 from app.routers.recommendations import router as recommendations_router
 from app.routers.ai_set import router as ai_set_router
 from app.routers.resale import router as resale_router
+from app.routers.notifications import router as notifications_router
 from app.database import engine
 
 load_dotenv('.env.local')
@@ -54,6 +55,10 @@ def run_migrations():
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             INDEX idx_resale_user_created (user_id, created_at)
         )""",
+        # ===== プロフィール（アバター・自己紹介）と通知既読時刻 =====
+        "ALTER TABLE users ADD COLUMN avatar_url MEDIUMTEXT",
+        "ALTER TABLE users ADD COLUMN bio TEXT",
+        "ALTER TABLE users ADD COLUMN notifications_read_at DATETIME NULL",
         # ===== 商品コメント（購入前Q&A）。create_all 不在のため明示作成 =====
         """CREATE TABLE IF NOT EXISTS comments (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -97,6 +102,7 @@ app.include_router(ai_router)
 app.include_router(recommendations_router)
 app.include_router(ai_set_router)
 app.include_router(resale_router)
+app.include_router(notifications_router)
 
 
 @app.get("/")
