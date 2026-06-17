@@ -28,23 +28,6 @@ def assess(product_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-# ==================== TEMP: 生スコア読み出し（取得後に削除する一時エンドポイント） ====================
-
-@router.get("/_temp/raw-score/{user_email}")
-def _temp_raw_score(user_email: str, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == user_email).first()
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    decayed = resale.decayed_score(user.resale_score or 0.0, user.resale_score_updated_at)
-    return {
-        "email": user.email,
-        "raw_stored_score": user.resale_score,        # 最後の更新時点の値（減衰前）
-        "decayed_now": round(decayed, 2),             # 参照時点の減衰後スコア（実効値）
-        "stage": resale.current_user_stage(user),
-        "score_updated_at": user.resale_score_updated_at,
-    }
-
-
 @router.get("/status/{user_email}")
 def get_status(user_email: str, db: Session = Depends(get_db)):
     """本人向けの段階情報。検知ロジックや内訳は返さない。"""
