@@ -115,12 +115,6 @@ def get_liked_products(
     products = interactions.get_liked_products(db, user_email, skip, limit)
     return interactions.attach_like_counts(db, products)
 
-# ==================== TEMP: 閲覧履歴クリア（実行後に削除する一時エンドポイント） ====================
-
-@router.delete("/views/{user_email}")
-def _temp_clear_view_history(user_email: str, db: Session = Depends(get_db)):
-    return interactions.clear_view_history(db, user_email)
-
 # ==================== Comments（購入前Q&A） ====================
 
 @router.get("/{product_id}/comments", response_model=List[CommentResponse])
