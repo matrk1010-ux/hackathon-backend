@@ -30,9 +30,13 @@ def list_products(
     if category:
         query = query.filter(Product.category == category)
 
-    # 状態（コンディション）でフィルタ
+    # 状態（コンディション）でフィルタ。カンマ区切りで複数指定可（OR 条件）。
     if condition:
-        query = query.filter(Product.condition == condition)
+        conds = [c.strip() for c in condition.split(",") if c.strip()]
+        if len(conds) == 1:
+            query = query.filter(Product.condition == conds[0])
+        elif conds:
+            query = query.filter(Product.condition.in_(conds))
 
     # ステータスでフィルタ
     if status_filter:
