@@ -9,7 +9,7 @@ MAX_COMMENT_LEN = 1000
 def list_comments(db: Session, product_id: int) -> list:
     """商品のコメントを古い順に取得（表示名を join で付与）。"""
     rows = (
-        db.query(Comment, User.username)
+        db.query(Comment, User.username, User.avatar_url)
         .join(User, User.id == Comment.user_id)
         .filter(Comment.product_id == product_id)
         .order_by(Comment.created_at.asc())
@@ -21,10 +21,11 @@ def list_comments(db: Session, product_id: int) -> list:
             "product_id": c.product_id,
             "user_id": c.user_id,
             "username": uname,
+            "avatar_url": avatar,
             "body": c.body,
             "created_at": c.created_at,
         }
-        for c, uname in rows
+        for c, uname, avatar in rows
     ]
 
 
@@ -51,6 +52,7 @@ def create_comment(db: Session, product_id: int, user_email: str, body: str) -> 
         "product_id": comment.product_id,
         "user_id": comment.user_id,
         "username": user.username,
+        "avatar_url": user.avatar_url,
         "body": comment.body,
         "created_at": comment.created_at,
     }

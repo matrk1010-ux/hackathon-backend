@@ -163,6 +163,7 @@ class CommentResponse(BaseModel):
     product_id: int
     user_id: int
     username: str       # 表示名（join で付与）
+    avatar_url: Optional[str] = None  # 投稿者のアバター（join で付与）
     body: str
     created_at: datetime
 
