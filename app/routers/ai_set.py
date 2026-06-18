@@ -146,7 +146,7 @@ def _avg_condition_rank(plan: "AiSetPlan") -> float:
 
 
 def annotate_and_sort_plans(plans: list["AiSetPlan"]) -> list["AiSetPlan"]:
-    """プランに一言ラベルを付け、コスパ（安さ0.6＋状態0.4）順に並べ替える。
+    """プランに一言ラベルを付け、コスパ（安さ0.5＋状態0.5）順に並べ替える。
 
     - 値段と状態を各プラン間で正規化し、総合スコアが最良のものを最上位＝おすすめに。
     - 最安プランには「安さ重視ならこちら」、最も状態が良いプランには「より状態が綺麗」。
@@ -167,7 +167,7 @@ def annotate_and_sort_plans(plans: list["AiSetPlan"]) -> list["AiSetPlan"]:
 
     # 小さいほど良いスコア（安さ重視のコスパ）
     scores = [
-        0.6 * norm(prices[i], pmin, pmax) + 0.4 * norm(conds[i], cmin, cmax)
+        0.5 * norm(prices[i], pmin, pmax) + 0.5 * norm(conds[i], cmin, cmax)
         for i in range(len(plans))
     ]
     cheapest_i = min(range(len(plans)), key=lambda i: (prices[i], conds[i]))
