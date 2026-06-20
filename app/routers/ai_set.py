@@ -286,7 +286,6 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
 
     candidate_map = {p.id: p for p in candidates}
     plans: list[AiSetPlan] = []
-    overlaps: list[bool] = []  # 各プランが既所有分と重複するか（plansと同順）
     for item in plans_raw:
         if not isinstance(item, dict):
             continue
@@ -309,13 +308,11 @@ def ai_set_chat(request: AiSetChatRequest, db: Session = Depends(get_db)):
                 total_price=sum(p.price for p in products),
             )
         )
-        overlaps.append(bool(item.get("owned_overlap")))
         if len(plans) >= 3:
             break
 
-    # 既所有分と重複しないプランが1つでもあれば、重複するプランは表示しない
-    if any(not o for o in overlaps):
-        plans = [p for p, o in zip(plans, overlaps) if not o]
+    # プランは最大3つそのまま提示する（不足分だけのプランと、全巻セット等の
+    # まとめ買いプランを両方見せたいので、重複ありプランの自動除外は行わない）。
 
     # 一言ラベル付与＋コスパ順（おすすめを先頭）に並べ替え
     plans = annotate_and_sort_plans(plans)
